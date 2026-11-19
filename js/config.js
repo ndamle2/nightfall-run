@@ -6,5 +6,5 @@
  * kept in the browser (and saved to data/games/ when served by `python3 -m ai.serve`).
  */
 window.NIGHTFALL_CONFIG = {
-  recordsUrl: '',
+  recordsUrl: 'https://script.google.com/macros/s/AKfycbzeiaioZkOm8XshIZknXdecXyKYq7kq-fbKYvF19lt7CHE0urM7xwz3U2bPNXC42XTgnw/exec',
 };
