@@ -27,14 +27,23 @@ detectives, or playing the detectives against a computer fugitive. Against the c
 there are no look-away curtains: the computer's moves play out on the board, and you are told
 which tickets a computer fugitive used.
 
-- **Full-strength bots:** run `python3 -m ai.serve` in the game folder (needs numpy; numba
-  makes the bots much faster, see [Bots](#bots-python)). It loads the bots, finds a free
-  port (the first from 8000 up), prints the address and opens it in the browser. The bots
-  are the alpha-beta fugitive and the ISMCTS detectives, about half a second per detective
-  move. `--port N` insists on one port, `--no-browser` skips opening the page.
-- **Opened straight from disk** (double-clicking `index.html`), the page uses simpler
-  heuristic bots built into the page (`js/bots.js`), much easier to beat. If the server
-  stops mid-game, the page switches to these and says so.
+The computer players are the full-strength bots (the alpha-beta fugitive and the ISMCTS
+detectives, see [Bots](#bots-python)) running in the browser itself: `js/ai/` is a
+JavaScript port of the Python bots in `ai/`. They make the same choices, checked position by
+position by `tests/ai_parity.test.js`, and take about 0.1 s per detective move. Over 900
+games on the five cities (`node tools/arena.js`, 60 per city and count) the JavaScript
+detectives won 22.3% / 55.3% / 76.0% with 3 / 4 / 5 detectives, against 21.2% / 54.4% /
+76.0% for the Python bots (±5 points). They run in
+a Web Worker so the page stays responsive. Opened straight from disk (double-clicking
+`index.html`), browsers refuse to start the worker, so the bots run on the page instead
+(the same bots; the page just pauses while one thinks). If they ever fail, the simpler
+heuristic bots in `js/bots.js` finish the game, and the page says so.
+
+`python3 -m ai.serve` in the game folder serves the page too. It finds a free port (the
+first from 8000 up), prints the address and opens it; `--port N` insists on one port,
+`--no-browser` skips opening the page. It also saves every game to `data/games/` (below),
+and still answers bot moves and reviews over HTTP (`/api/move`, `/api/review`) with the
+Python bots, for tools and tests.
 
 **Game review.** When a game ends, **View the board and review** (or **Review** in the side
 panel) shows a review: a few plain-language lessons, then a move-by-move table comparing
@@ -43,17 +52,38 @@ fugitive: how close the detectives were, room to run, how many stations they had
 consider, which move let them force a capture, wasted secrets, doubles spent too early,
 how predictable you were. As the detectives: where the fugitive really was, how often you
 matched the bot detectives, and any move that could have caught it but didn't. Pass and
-play gets both. The review runs on the server (`ai/review.py`, `python3 -m ai.review
-<record>` prints one); opened from disk the page says so instead.
+play gets both. The review runs in the browser (`js/ai/review.js`, a port of `ai/review.py`
+with the same fields and wording; `python3 -m ai.review <record>` prints one from Python).
 
 **Game records.** Every game is recorded move by move (pass-and-play games too, as mode
-`hotseat`), with how long each move took: served by `ai.serve`, to `data/games/<id>.json` (`--data <dir>` for
-elsewhere); opened from disk, in the browser, with a **Download the records** link on the
-setup screen (and they are handed to the server the next time the page is served by it).
+`hotseat`), with how long each move took and the optional player name from the setup screen.
+Served by `ai.serve`, each game goes to `data/games/<id>.json` (`--data <dir>` for
+elsewhere). Otherwise the browser keeps them, with a **Download the records** link on the
+setup screen, and hands them to the server the next time the page is served by it. With a
+records address in `js/config.js`, finished games are also sent there: a private Google
+Sheet, see below.
 `python3 -m ai.human_games [files or folders]` checks and summarises them, and
 `ai/human_games.py` turns them into training data (`as_training_games`: the fugitive turns of
 games where a person played the fugitive, against the computer or pass and play, in the
 format the location model is fitted on).
+
+### Putting it online for friends
+
+The game is a static site, so GitHub Pages (or any static host) can serve it as is, bots
+included:
+
+1. In the repository on GitHub: **Settings → Pages → Build and deployment → Deploy from a
+   branch**, branch `main`, folder `/ (root)`. The site appears at
+   `https://<user>.github.io/<repo>/` within a minute or two. On a free account the
+   repository has to be public for Pages. Nothing links to the site, so only people you send
+   the address to will find it, but it isn't locked.
+2. To collect your friends' games, set up the Google Sheet in
+   [`tools/sheets/README.md`](tools/sheets/README.md) and put its address in `js/config.js`.
+   The sheet stays private to your Google account. The page can only add games to it, and
+   `python3 -m ai.import_records <sheet.csv>` brings them into `data/games/` after checking
+   each one against the rules.
+
+`data/` is in `.gitignore`, so your own records stay off GitHub.
 
 ## Project layout
 
@@ -63,7 +93,9 @@ format the location model is fitted on).
 | `js/maps/*.js` | The five generated cities (Brackwell, Harrowgate, Oldmere, Saltmarsh, Highcombe): stations, cab/tram/metro/ferry links, start stations, street shapes and decor. Each registers itself in `window.MAPS`; every new game starts in a random one (the setup screen lets you pick another). Rebuild them all with `node tools/genmap.js`. |
 | `js/render.js` | SVG board renderer with pan and zoom |
 | `js/ui.js` | Turn flow, hot-seat privacy screens, games against the computer, game records, side panel, save/resume |
-| `js/bots.js` | The in-page computer players (the heuristic fugitive and detectives of `tools/simulate.js`), used when the page runs without `ai.serve` |
+| `js/ai/` | The full-strength computer players in JavaScript, ports of the Python bots: `core.js` (board tables, rules by station index, heuristic players, value and location models), `alphabeta.js`, `ismcts.js`, `review.js` (post-game review), `players.js` (one call per bot move or review), `worker.js` (runs them in a Web Worker), `weights.js` (the fitted models, generated by `python3 tools/export_ai_weights.py`) |
+| `js/config.js` | Site settings: `recordsUrl`, where finished games are sent (see [Putting it online](#putting-it-online-for-friends)) |
+| `js/bots.js` | Simple heuristic players (those of `tools/simulate.js`), the last resort if the full-strength bots fail |
 | `tools/genmap.js` | Map generator (`node tools/genmap.js [seed] [setting=value ...]`); settings and their defaults are in `DEFAULTS` at the top |
 | `tools/decor.js` | Visual-only city detail, run by the generator: shaped streets (arcs, S-bends, kinks, doglegs that never cross or touch other stations), street-front buildings, park trees, paths and ponds, bridges, squares at metro hubs, and district/river/park names |
 | `tools/layouts.js` | Five hand-designed city layouts (river, parks, districts) with their tuned seeds and settings; build one with `node tools/genmap.js layout=<key>` (default `twin`; `layout=none` for the free generator) |
@@ -72,7 +104,10 @@ format the location model is fitted on).
 | `tools/simulate.js` | Bot-vs-bot win-rate simulation on every map (`node tools/simulate.js [games] [--sy <dir>]`) |
 | `tests/engine.test.js` | Rules tests plus 300 random full games (`node tests/engine.test.js`) |
 | `tests/bots.test.js` | The in-page bots play 120 games against each other on every map, recorded as the page records them (`node tests/bots.test.js`) |
-| `data/games/` | Recorded games against the computer (created by `ai.serve`) |
+| `tests/ai_parity.test.js` | The JavaScript bots against the Python ones on about 1,000 positions: rules, values, playouts, prior scores, fugitive model, location estimates, alpha-beta scores (`node tests/ai_parity.test.js`; positions from `python3 tools/ai_parity_fixture.py`) |
+| `tools/arena.js` | Bot-vs-bot win rates for the JavaScript bots, like `python3 -m ai.arena` (`node tools/arena.js --dets 3,4,5 --games 48`) |
+| `tools/sheets/` | Google Apps Script (`Code.gs`) and setup steps for collecting games in a private Google Sheet; `python3 -m ai.import_records <csv>` imports them |
+| `data/games/` | Recorded games (created by `ai.serve` and `ai.import_records`; not in git) |
 | `tools/trace_games.js` | Records random JS games move by move, for the Python port's parity test |
 | `ai/` | Python bots and engines; see [Bots](#bots-python) |
 

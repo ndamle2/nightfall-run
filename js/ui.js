@@ -14,20 +14,75 @@
   const MAX_LOCAL_RECORDS = 300;
 
   // ---------- computer players ----------
-  // Served by `python3 -m ai.serve`, the page asks the Python bots for moves (and the server
-  // saves every human-vs-bot game to data/games/). Opened from disk, it uses the simpler
-  // bots in js/bots.js and keeps game records in the browser for download.
+  // The strong bots (alpha-beta fugitive, ISMCTS detectives: js/ai/, ports of the Python
+  // bots in ai/) run in the browser, in a Web Worker when one can start, else on the page.
+  // The basic bots in js/bots.js are the last resort if they fail.
+  // Game records: served by `python3 -m ai.serve`, every game is saved to data/games/; with
+  // a records address in js/config.js, finished games are also sent there (a Google Sheet,
+  // see tools/sheets/); and the browser keeps its own copy for download.
+  const CONFIG = window.NIGHTFALL_CONFIG || {};
   const PLAY_MODES = {
     hotseat: 'Pass and play: everyone at this computer',
     'human-fugitive': 'Play the fugitive against computer detectives',
     'human-detectives': 'Play the detectives against a computer fugitive',
   };
   let server = null; // null while unknown, then true / false
-  let serverBots = null;
+  const AI_BOTS = (window.AIPlayers && window.AIPlayers.BOTS) || { engine: 'browser-basic' };
   let botCtx = null; // js/bots.js context for the current map
   let botRun = 0; // bumped to cancel a bot turn in progress
   let turnReadyAt = Date.now(); // when the current move could first be made (thinking time)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** Runs the strong bots: ai.call('move' | 'review', record) → Promise of the result. */
+  const ai = (() => {
+    let worker = null;
+    let broken = !window.Worker || !window.AIPlayers;
+    let seq = 0;
+    const pending = new Map(); // id -> {resolve, reject, op, record}
+    const mapsSent = new Set();
+    const onPage = (op, record) => {
+      if (!window.AIPlayers) throw new Error('the computer players did not load');
+      const m = MAPS[record.map];
+      return op === 'move' ? AIPlayers.botMove(m, record) : AIPlayers.review(m, record);
+    };
+    function fail() {
+      // a worker that cannot start (e.g. a page opened from disk): run on the page instead
+      broken = true;
+      if (worker) worker.terminate();
+      worker = null;
+      const left = [...pending.values()];
+      pending.clear();
+      for (const p of left) setTimeout(() => { try { p.resolve(onPage(p.op, p.record)); } catch (e) { p.reject(e); } }, 0);
+    }
+    function start() {
+      try {
+        worker = new Worker('js/ai/worker.js');
+      } catch (e) { fail(); return; }
+      worker.onmessage = (e) => {
+        const p = pending.get(e.data.id);
+        if (!p) return;
+        pending.delete(e.data.id);
+        if (e.data.ok) p.resolve(e.data.result);
+        else p.reject(new Error(e.data.error));
+      };
+      worker.onerror = (e) => { e.preventDefault(); fail(); };
+    }
+    function call(op, record) {
+      if (!broken && !worker) start();
+      if (broken) {
+        // give the page a moment to draw first (the search blocks it while it runs)
+        return sleep(40).then(() => onPage(op, record));
+      }
+      return new Promise((resolve, reject) => {
+        const id = ++seq;
+        pending.set(id, { resolve, reject, op, record });
+        const msg = { id, op, map: record.map, record };
+        if (!mapsSent.has(record.map)) { msg.mapData = MAPS[record.map]; mapsSent.add(record.map); }
+        worker.postMessage(msg);
+      });
+    }
+    return { call, get onPage() { return broken; } };
+  })();
   const BOT_STEP_MS = 450; // minimum time each bot move stays on screen
   // post-game review (ai/review.py via the server): {id, status, data}; shown on the board
   let review = { id: null, status: 'idle', data: null };
@@ -178,7 +233,8 @@
       fugitiveStart: game.fugitive.start,
       detectiveStarts: game.detectives.map((d) => d.start),
       history: game.history || [],
-      bots: { engine: server ? 'server' : 'browser', ...(server && serverBots ? serverBots : {}) },
+      bots: AI_BOTS,
+      player: (prefs.player || '').trim() || null,
       result: game.winner ? { winner: game.winner, reason: game.reason, round: game.round } : null,
       created: game.meta.created,
       updated: new Date().toISOString(),
@@ -197,7 +253,7 @@
   }
 
   /** Saves the game's record (against the computer or pass and play): to the server when
-   * there is one, else in the browser. */
+   * there is one, else in the browser; a finished game also goes to the records address. */
   function saveRecord() {
     if (!game || !game.meta) return;
     const rec = buildRecord();
@@ -206,7 +262,29 @@
         .then((r) => { if (!r.ok) throw new Error(); })
         .catch(() => storeLocalRecord(rec));
     } else storeLocalRecord(rec);
+    if (rec.result) sendRecord(rec);
   }
+
+  /** Sends a record to the records address in js/config.js (once per game and length).
+   * beacon: use navigator.sendBeacon, which still works while the page is closing. */
+  function sendRecord(rec, beacon = false) {
+    const url = CONFIG.recordsUrl;
+    if (!url || !rec.history.length) return;
+    const tag = `${rec.id}:${rec.history.length}:${rec.result ? 1 : 0}`;
+    if (game && game.meta && game.meta.sent === tag) return;
+    if (game && game.meta && game.meta.id === rec.id) game.meta.sent = tag;
+    const body = JSON.stringify(rec);
+    try {
+      // text/plain keeps it a "simple" request: Apps Script answers without CORS preflight
+      if (beacon && navigator.sendBeacon) navigator.sendBeacon(url, new Blob([body], { type: 'text/plain' }));
+      else fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body, keepalive: body.length < 60000 });
+    } catch (e) { /* offline: the browser copy remains */ }
+  }
+
+  // A game left unfinished (tab closed mid-game) is sent as far as it got.
+  window.addEventListener('pagehide', () => {
+    if (game && game.meta && !game.winner && (game.history || []).length >= 6) sendRecord(buildRecord(), true);
+  });
 
   function downloadRecords() {
     const blob = new Blob([JSON.stringify(localRecords(), null, 1)], { type: 'application/json' });
@@ -222,12 +300,13 @@
   /** Finds out whether the page is served by ai.serve; if so, hands it any records the
    * browser kept while it ran without the server. */
   async function detectServer() {
-    if (!/^https?:$/.test(location.protocol)) { server = false; return; }
+    // ai.serve only ever runs on your own machine: elsewhere (a static host) don't probe
+    const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if (!/^https?:$/.test(location.protocol) || !(local || CONFIG.probeServer)) { server = false; return; }
     try {
       const r = await fetch('api/ping', { cache: 'no-store' });
       const d = await r.json();
       server = !!d.ok;
-      serverBots = d.bots || null;
     } catch (e) {
       server = false;
     }
@@ -251,10 +330,8 @@
   function requestReview() {
     if (!game || !game.meta || review.id === game.meta.id) return;
     const id = game.meta.id;
-    if (!server) { review = { id, status: 'unavailable', data: null }; return; }
     review = { id, status: 'loading', data: null };
-    fetch('api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: buildRecord() }) })
-      .then((r) => r.json().then((d) => { if (!r.ok) throw new Error(d.error || 'review failed'); return d; }))
+    ai.call('review', buildRecord())
       .then((d) => { if (review.id === id) review = { id, status: 'ready', data: d }; })
       .catch((e) => { if (review.id === id) review = { id, status: 'error', data: e.message }; })
       .finally(() => { if (review.id === id) renderReview(); });
@@ -274,7 +351,6 @@
     if (!show) return;
     let body = '';
     if (review.status === 'loading') body = '<p class="hint">Reviewing your game…</p>';
-    else if (review.status === 'unavailable') body = '<p class="hint">The game review needs the Python bots: run <code>python3 -m ai.serve</code> and play from the address it prints.</p>';
     else if (review.status === 'error') body = `<p class="hint">The review failed: ${esc(review.data)}</p>`;
     else if (review.status === 'ready') {
       const d = review.data;
@@ -315,28 +391,23 @@
   }
 
   /** The bot's next actions: the fugitive's whole turn, or the current detective's move. */
+  let strongBots = true; // false after the strong bots fail: the basic ones finish the game
   async function botActions() {
-    if (server) {
+    const t0 = Date.now();
+    if (strongBots) {
       try {
-        const r = await fetch('api/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ record: buildRecord() }),
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'bot error');
-        return d.actions.map((a) => ({ ...a, by: 'server', ms: d.ms }));
+        const acts = await ai.call('move', buildRecord());
+        return acts.map((a) => ({ ...a, by: 'browser-ai', ms: Date.now() - t0 }));
       } catch (e) {
-        server = false;
-        toast('Lost the bot server; the basic in-browser bots take over.', 5000);
+        strongBots = false;
+        toast(`The computer players hit a problem (${e.message}); simpler bots take over.`, 6000);
       }
     }
     if (!botCtx) botCtx = Bots.context(MAP, ADJ);
-    const t0 = Date.now();
     const acts = game.phase === 'fugitive'
       ? Bots.fugitiveTurn(game, botCtx).map((a) => ({ side: 'F', ...a }))
       : [{ side: 'D', i: game.current, ...Bots.detectiveMove(game, botCtx) }];
-    return acts.map((a) => ({ ...a, by: 'browser', ms: Date.now() - t0 }));
+    return acts.map((a) => ({ ...a, by: 'browser-basic', ms: Date.now() - t0 }));
   }
 
   /** Plays one bot action on the game through the engine (which checks it is legal). */
@@ -370,9 +441,9 @@
         try {
           applyBotAction(a);
         } catch (e) {
-          // a server answer the browser's engine rejects: use the local bots from here
-          server = false;
-          toast('The bot server sent an illegal move; the basic in-browser bots take over.', 6000);
+          // an answer the page's engine rejects: use the basic bots from here
+          strongBots = false;
+          toast('The computer players made an illegal move; simpler bots take over.', 6000);
           break;
         }
       }
@@ -438,6 +509,8 @@
           ${Object.entries(PLAY_MODES).map(([k, label]) => `<option value="${k}" ${k === (prefs.playMode || 'hotseat') ? 'selected' : ''}>${esc(label)}</option>`).join('')}
         </select>
         <span></span><span class="fineprint" id="bot-note"></span>
+        <label for="player-name">Your name</label>
+        <input type="text" id="player-name" value="${esc(prefs.player || '')}" maxlength="30" placeholder="optional">
         <label for="f-name">Fugitive</label>
         <input type="text" id="f-name" value="The Fugitive" maxlength="20">
         <label for="n-det">Detectives</label>
@@ -457,10 +530,11 @@
     const renderBotNote = () => {
       const pm = $('#play-mode').value;
       const note = $('#bot-note');
-      if (pm === 'hotseat') note.textContent = '';
-      else if (server === null) note.textContent = 'Checking for the bot server…';
-      else if (server) note.textContent = 'Computer players: the full-strength bots from the Python server. This game is recorded to data/games/.';
-      else note.innerHTML = 'Computer players: the basic bots built into the page. For the strong bots, run <code>python3 -m ai.serve</code> in the game folder and play at the address it prints.';
+      const sent = CONFIG.recordsUrl
+        ? ' Finished games (the moves, the city, and your name if you give one) are sent to the game’s maker to help improve the bots.'
+        : server ? ' This game is recorded to data/games/.' : '';
+      if (pm === 'hotseat') note.textContent = sent.trim();
+      else note.textContent = `The computer plays at full strength, in your browser.${sent}`;
       const n = localRecords().length;
       $('#records-note').innerHTML = !server && n
         ? `${n} game${n > 1 ? 's' : ''} against the computer recorded in this browser. <a href="#" id="dl-records">Download the records</a>`
@@ -524,6 +598,8 @@
         name: ($(`#d-name-${i}`).value || `Detective ${d.name}`).trim(),
         color: d.color,
       }));
+      prefs.player = $('#player-name').value.trim();
+      savePrefs();
       startGame({ fugitiveName: ($('#f-name').value || 'The Fugitive').trim(), detectives }, $('#play-mode').value);
     });
     if (resumable) $('#btn-resume').addEventListener('click', () => resume(saved));

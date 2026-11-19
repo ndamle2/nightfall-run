@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 node_modules/
+
+# your own game records (data/games/): keep them out of the public repo
+data/

@@ -4,8 +4,9 @@ Serves the game with the Python bots behind it, and records human-vs-bot games.
     python3 -m ai.serve                 # first free port from 8000 up; opens the browser
     python3 -m ai.serve --port 8080 --no-browser
 
-The page (index.html) works on its own too, with simpler bots that run in the browser; served
-from here it asks this process for the bots' moves instead:
+The page (index.html) runs its computer players itself (js/ai/, ports of the Python bots),
+so what this adds is recording: every game the page plays is saved here. The bots are still
+available over HTTP, for tools and tests:
 
     GET  /api/ping     {"ok": true, "bots": {...}}
     POST /api/move     {"record": <game record>} -> {"actions": [...], "ms": ...}
