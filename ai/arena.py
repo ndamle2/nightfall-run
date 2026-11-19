@@ -68,10 +68,12 @@ def detective_view(s, oracle=False):
 
 
 def play_game(gmap, k, fug, det, rng, oracle=False):
-    """One game; returns (state, seconds spent by fugitive bot, by detective bot, decisions)."""
+    """One game; returns (state, seconds spent by fugitive bot, by detective bot, decisions,
+    the fugitive's room to run after each detective round)."""
     s = E.new_game(gmap, k, rng)
     tf = td = 0.0
     nf = nd = 0
+    rooms = []  # the fugitive's room to run (true position) after each detective round
     while not s.over:
         if s.phase == E.FUGITIVE_PHASE:
             t = time.perf_counter()
@@ -85,7 +87,9 @@ def play_game(gmap, k, fug, det, rng, oracle=False):
             td += time.perf_counter() - t
             nd += 1
             E.move_detective(s, to, tk)
-    return s, tf, td, nf, nd
+            if s.phase == E.FUGITIVE_PHASE:
+                rooms.append(P.room_to_run(s))
+    return s, tf, td, nf, nd, rooms
 
 
 def _worker(job):
@@ -93,8 +97,9 @@ def _worker(job):
     gmap = get_map(key)
     fug = make_fugitive(fname, seed * 2 + 1, fopts)
     det = make_detectives(dname, seed * 2 + 2, dopts)
-    s, tf, td, nf, nd = play_game(gmap, k, fug, det, random.Random(seed), oracle)
+    s, tf, td, nf, nd, rooms = play_game(gmap, k, fug, det, random.Random(seed), oracle)
     return {'map': key, 'k': k, 'winner': s.winner, 'round': s.round, 'reason': s.reason,
+            'room': sum(rooms) / len(rooms) if rooms else 0.0,
             'tf': tf, 'td': td, 'nf': nf, 'nd': nd}
 
 

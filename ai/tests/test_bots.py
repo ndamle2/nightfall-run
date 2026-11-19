@@ -143,7 +143,7 @@ class ISMCTS(unittest.TestCase):
     def test_leaf_modes_take_known_capture(self):
         """Value-model leaves, short playouts and plain UCB all still find a sure capture."""
         rng = random.Random(8)
-        bots = [ISMCTSDetectives(iterations=128, search_belief='both', seed=0),
+        bots = [ISMCTSDetectives(iterations=128, belief='model', search_belief='both', seed=0),
                 ISMCTSDetectives(iterations=128, rollout_rounds=0, seed=1),
                 ISMCTSDetectives(iterations=128, rollout_rounds=2, seed=2),
                 ISMCTSDetectives(iterations=128, prior='none', rollout_rounds=0, seed=3)]
@@ -196,10 +196,13 @@ class ISMCTS(unittest.TestCase):
         self.assertTrue((g.phase[live] == E.FUGITIVE_PHASE).all())
 
     def test_belief_model_is_consistent(self):
-        """belief='model' is a distribution over the candidate set that never rules out
-        where the fugitive really is, and resets for a new game."""
+        """belief='model' / 'fitted' is a distribution over the candidate set that never
+        rules out where the fugitive really is, and resets for a new game."""
         rng = random.Random(23)
-        bot = ISMCTSDetectives(iterations=32, belief='model', belief_beta=2.0, seed=6)
+        for belief in ('model', 'fitted', 'mix'):
+            self._belief_consistent(rng, ISMCTSDetectives(iterations=32, belief=belief, seed=6))
+
+    def _belief_consistent(self, rng, bot):
         for g in range(3):
             s = E.new_game(self.gm, 4, rng)
             fug, det = P.HeuristicFugitive(seed=g), P.HeuristicDetectives(seed=g)
@@ -226,7 +229,7 @@ class ISMCTS(unittest.TestCase):
         scorer given that estimate."""
         from ai.vec_engine import VecGames
         rng = random.Random(31)
-        bots = [ISMCTSDetectives(iterations=128, search_belief=sb, seed=i)
+        bots = [ISMCTSDetectives(iterations=128, belief='model', search_belief=sb, seed=i)
                 for i, sb in enumerate(('prior', 'both'))]
         states, masses, done = [], [], 0
         nr = np.random.default_rng(4)
@@ -252,6 +255,49 @@ class ISMCTS(unittest.TestCase):
                 sc = dict((a[0], v) for a, v in P.HeuristicDetectives.scores(s, m, team, cover))
                 # equal up to float rounding (float32 in the batched version)
                 self.assertLess(sc[g.det_pos[b, s.current]] - min(sc.values()), 1e-4)
+
+    def test_tree_reuse(self):
+        """reuse='round' / 'game': every move legal, later detectives in a round start from
+        the previous detective's subtree, and 'total' keeps the root at the budget."""
+        for reuse, budget in (('round', 'add'), ('game', 'total')):
+            rng = random.Random(12)
+            s = E.new_game(self.gm, 3, rng)
+            fug = P.HeuristicFugitive(seed=1)
+            bot = ISMCTSDetectives(iterations=128, reuse=reuse, reuse_budget=budget, seed=3)
+            reused = []
+            while not s.over and s.round < 8:
+                if s.phase == E.FUGITIVE_PHASE:
+                    P.apply_turn(s, fug.choose_turn(s))
+                    continue
+                first = s.current == 0
+                mv = bot.choose_move(s.public_view())
+                self.assertIn(mv, E.detective_actions(s))
+                if not first:
+                    reused.append(bot.last['reused'])
+                if budget == 'total' and bot.last['reused'] < 128:
+                    self.assertGreaterEqual(bot.last['reused'] + bot.last['iterations'], 128)
+                E.move_detective(s, *mv)
+            self.assertGreater(sum(reused) / len(reused), 20)
+
+    def test_team_territory(self):
+        """The union territory (any candidate) is an upper bound on the expected one."""
+        rng = random.Random(14)
+        n = 0
+        while n < 15:
+            s = random_midgame(self.gm, 4, rng, rng.randint(2, 18))
+            if s is None:
+                continue
+            P.apply_turn(s, P.RandomFugitive(seed=n).choose_turn(s))
+            if s.over:
+                continue
+            cands = np.flatnonzero(E.possible_mask(s))
+            moves = E.group_moves(E.detective_actions(s))
+            tos = np.array([to for to, _ in moves])
+            masks = np.array([E.ticket_mask(s.det_tickets[s.current])] * len(tos))
+            u = P.team_territory(s, cands, tos, masks, 3, 'union')
+            e = P.team_territory(s, cands, tos, masks, 3, 'expected')
+            self.assertTrue((e <= u + 1e-9).all())
+            n += 1
 
     def test_heuristic_model_still_works(self):
         rng = random.Random(2)

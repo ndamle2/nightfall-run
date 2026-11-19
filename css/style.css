@@ -73,6 +73,10 @@ button { font: inherit; }
 .district-name { font-family: var(--serif); font-style: italic; font-weight: 600; fill: #a99f8e; letter-spacing: 7px; text-anchor: middle; dominant-baseline: central; paint-order: stroke; stroke: var(--map); stroke-width: 7px; stroke-linejoin: round; }
 
 .edge { fill: none; stroke-linecap: round; }
+/* lines passing through a station where another line of the same kind also passes */
+.crossing-casing { fill: none; stroke: var(--road); stroke-width: 14; stroke-linecap: butt; }
+.crossing-line { stroke-width: 5.5; stroke-linecap: butt; }
+.crossing-num { display: none; } /* the over line goes round the station, so its own number stays visible */
 .edge-cab { stroke: var(--cab); stroke-width: 5.5; }
 .edge-tram { stroke: var(--tram); stroke-width: 5.5; }
 .edge-metro { stroke: var(--metro); stroke-width: 5.5; }
@@ -114,6 +118,16 @@ button { font: inherit; }
 .piece-num { font: 700 15px var(--font); fill: #fff; text-anchor: middle; dominant-baseline: central; }
 .piece-badge { fill: #fff; stroke-width: 2; }
 .piece-badge-text { font: 800 11px var(--font); text-anchor: middle; dominant-baseline: central; }
+.det-num { font: 800 22px var(--font); fill: #fff; text-anchor: middle; dominant-baseline: central; }
+.det-halo {
+  stroke-width: 3; fill-opacity: 0.18;
+  transform-box: fill-box; transform-origin: center;
+  animation: det-pulse 2.2s ease-in-out infinite;   /* slower than the legal-move pulse */
+}
+@keyframes det-pulse {
+  0%, 100% { transform: scale(0.82); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 0.35; }
+}
 .piece-active {
   fill: none; stroke-width: 3; stroke-dasharray: 6 5;
   transform-box: fill-box; transform-origin: center;
@@ -180,6 +194,9 @@ button { font: inherit; }
 .btn.big { padding: 12px 22px; font-size: 16px; }
 
 .dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex: none; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,.12); }
+.dot.shield { width: 18px; height: 20px; border-radius: 0; box-shadow: none;
+  clip-path: path('M9 0 C11.7 1.9 14.2 2.5 18 2.5 C18 11.3 15.5 16.9 9 20 C2.5 16.9 0 11.3 0 2.5 C3.8 2.5 6.3 1.9 9 0 Z');
+  color: #fff; font: 800 10px/20px var(--font); text-align: center; }
 
 #players { display: flex; flex-direction: column; gap: 8px; }
 .player {
@@ -268,3 +285,37 @@ button { font: inherit; }
   #app { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; }
   #panel { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* post-game review card */
+.review h2 { margin-bottom: 8px; }
+.review h3 { margin: 12px 0 6px; font-size: 14px; }
+.review .lessons { margin: 0 0 10px; padding-left: 18px; font-size: 13px; line-height: 1.45; }
+.review .lessons li { margin-bottom: 6px; }
+.review details summary { cursor: pointer; font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.review-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.review-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.review-table td { padding: 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.review-table tr[data-at] { cursor: pointer; }
+.review-table tr[data-at]:hover td { background: var(--plaza); }
+.verdict { display: inline-block; padding: 1px 6px; border-radius: 999px; font-weight: 700; font-size: 11px; background: var(--line); }
+.verdict.good { background: #d8efe2; color: #1d6b45; }
+.verdict.ok { background: #f3ead0; color: #7a5a10; }
+.verdict.weak { background: #f7dccb; color: #8a4316; }
+.verdict.bad { background: #f6d2cf; color: #9b2c24; }
+.verdict.lost { background: #e6e1d8; color: var(--muted); }
+
+/* setup: city balance popup */
+.balance-link { margin-left: 6px; color: var(--ink); font-weight: 600; white-space: nowrap; }
+.balance-pop { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.balance-pop .bp-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.bp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bp-table th { text-align: right; color: var(--muted); font-weight: 600; padding: 3px 6px; }
+.bp-table th:first-child, .bp-table td:first-child { text-align: left; }
+.bp-table td { text-align: right; padding: 4px 6px; border-top: 1px solid var(--line); }
+.bp-table tr[data-city] { cursor: pointer; }
+.bp-table tr[data-city]:hover td { background: var(--plaza); }
+.bp-table tr.sel td { font-weight: 700; background: #f3eedf; }
+.bp-table th.sel, .bp-table td.sel { color: var(--ink); box-shadow: inset 0 0 0 9999px rgba(0,0,0,.035); }
+.bp-note { font-size: 11px; color: var(--muted); font-weight: 500; }
+.balance-pop .fineprint { margin: 8px 0 0; }

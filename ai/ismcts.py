@@ -110,13 +110,13 @@ def ranked_turns(s):
     return [turn for _, turn in entries]
 
 
-def heuristic_prior(s, temp, mass=None, team=0.0, cover=0.0):
+def heuristic_prior(s, temp, mass=None, team=0.0, cover=0.0, scorer=None):
     """Detective actions and a softmax prior over the heuristic's move scores (lower score =
     better). Stepping onto a candidate station scores -1000 there; for the prior it counts
     as 3 points better than the best other move, so it is favoured but not certain. With a
     location estimate `mass`, scores use it, and a step onto a candidate counts as 2 to 4
     points better, by its probability relative to the likeliest candidate."""
-    scored = P.HeuristicDetectives.scores(s, mass, team, cover)
+    scored = scorer(s) if scorer is not None else P.HeuristicDetectives.scores(s, mass, team, cover)
     acts = [a for a, _ in scored]
     sc = np.array([x for _, x in scored], dtype=float)
     other = sc[sc > -500]
@@ -150,20 +150,33 @@ def _restrict(mass, cand):
 
 
 class ISMCTSDetectives:
-    def __init__(self, iterations=1536, time_limit=None, batch=64, c=0.7, belief='model',
+    def __init__(self, iterations=3072, time_limit=None, batch=64, c=0.7, belief='mix',
                  fugitive_model='bandit', widen=1.0, model_noise=3.0, prior='heuristic',
-                 c_puct=1.5, prior_temp=1.0, rollout_rounds=2, value_path=None, belief_beta=2.0,
-                 search_belief='none', team=0.0, cover=0.0, fast=True, seed=None):
-        """iterations / time_limit: search budget per move (time_limit wins if both set).
+                 c_puct=1.5, prior_temp=1.0, rollout_rounds=2, value_path=None, belief_beta=2.0, move_path=None,
+                 search_belief='none', team=0.0, cover=0.0, fast=True, reuse='game',
+                 reuse_budget='add', prior_terr=0.3, playout_terr=0.0, terr_h=3, seed=None):
+        """iterations / time_limit: search budget per move (time_limit wins if both set);
+            3072 (1536 before the compiled code: 2x gained 6 points against alpha-beta).
         belief: where the fugitive probably is, within the public candidate set:
             'uniform'; 'far' (weights by distance to the nearest detective now); or 'model',
             which follows the public log move by move, assuming at each move the fugitive
             picked among the stations its ticket reaches with odds exp(belief_beta * distance
             from the nearest detective, capped at 4). The bot keeps that estimate between calls,
-            so use one bot per game (a new game is detected and resets it). Default 'model' with
+            so use one bot per game (a new game is detected and resets it). 'model' with
             belief_beta 2: 44.6% vs 32.9% for 'uniform' against alpha-beta (240 games each).
-        search_belief (belief='model' only): where else the estimate is used, besides
-            sampling: 'none'; 'prior' (the PUCT prior's heuristic scores, at every tree node,
+            'fitted': the same filter with a move model fitted to recorded alpha-beta games
+            (ai/move_weights.json, or move_path; policies.move_features): odds over each
+            (ticket, destination) pair, so the ticket used is evidence too. On held-out
+            games it puts 0.345 on the true station on average vs 0.270 for 'model'.
+            'mix': both move models (fitted, and 'model's runs-from-detectives odds as a
+            joint model), each filtering on its own, weighted by how well each predicted
+            what was seen so far this game. Near the better of the two against either
+            fugitive: alpha-beta (fitted 0.332, 'model' 0.266, mix 0.330) and the
+            heuristic fugitive (0.353, 0.394, 0.380). Default 'mix': against alpha-beta
+            (twin + quarter, 240 games each) 43.8% vs 37.9% for 'model' with 4 detectives,
+            72.1% vs 62.5% with 5 ('fitted': 41.3% / 69.2%).
+        search_belief (belief='model' only, so pass belief='model' with it): where else
+            the estimate is used, besides sampling: 'none'; 'prior' (the PUCT prior's heuristic scores, at every tree node,
             with the estimate carried along each node's public moves); 'both' (the prior and
             the heuristic detectives in leaf playouts).
         team, cover: team-coverage terms of the heuristic detectives (see
@@ -171,6 +184,20 @@ class ISMCTSDetectives:
         fast: evaluate leaves with the compiled code in ai/fast.py when numba is installed
             (same playouts, several times faster); not used with search_belief='both' or
             team/cover, which only the batched engine implements.
+        reuse: keep the search tree from one decision to the next, so the detectives act on
+            one shared plan: 'none'; 'round' (the next detective starts from the subtree
+            under the move just made, while the round lasts); 'game' (also across the
+            fugitive's turn, through the branch matching what it was seen to do). Default
+            'game': 35.0% vs 26.3% for 'none' against alpha-beta (4 detectives, 240 games).
+            The bot keeps the tree between calls, so use one bot per game.
+        reuse_budget: with reuse, 'add' runs `iterations` new iterations on top of the reused
+            tree; 'total' stops once the root has `iterations` visits in all.
+        prior_terr / playout_terr: weight per station of the fugitive's territory (union
+            mode, policies.team_territory, within terr_h moves) in the heuristic scores
+            behind the PUCT prior / in the playout detectives' moves. A team objective:
+            a move is judged by how much room it leaves the fugitive given where the other
+            detectives stand. Default prior_terr 0.3 (31.3% vs 26.3%; with reuse='game'
+            37.9%, and 62.5% vs 52.1% with 5 detectives); playout_terr 0 (no gain, +40% time).
         fugitive_model: 'bandit' or 'heuristic' (see the module docstring).
         widen: bandit model, turns considered = 1 + widen * sqrt(visits).
         model_noise: heuristic model, randomness in heuristic score units.
@@ -186,7 +213,19 @@ class ISMCTSDetectives:
         self.belief = belief
         self.belief_beta = belief_beta
         self.search_belief = search_belief if belief == 'model' else 'none'
-        self._mem = None  # belief='model': [game key, log entries processed, mass (N,)]
+        self._mem = None  # belief='model'/'fitted': [game key, log entries processed, mass (N,)]
+        self._move_ws = None   # 'fitted' / 'mix': the move models' weight vectors
+        if belief in ('fitted', 'mix'):
+            import json
+            from pathlib import Path
+            d = json.loads(Path(move_path or Path(__file__).with_name('move_weights.json')).read_text())
+            if tuple(d['features']) != P.MOVE_FEATS:
+                raise ValueError('move_weights.json does not match policies.MOVE_FEATS')
+            self._move_ws = [np.array(d['weights'])]
+            if belief == 'mix':
+                runs = np.zeros(len(P.MOVE_FEATS))
+                runs[P.MOVE_FEATS.index('dg')] = belief_beta
+                self._move_ws.append(runs)
         self.fugitive_model = fugitive_model
         self.widen = widen
         self.prior = prior
@@ -207,21 +246,39 @@ class ISMCTSDetectives:
         if self.fast:
             self._W = F.full_weights(self.value)
             F.seed(self.rng.randrange(2 ** 31))
+        # compiled tree pieces: identical results, used whenever numba is available
+        self.prior_terr, self.playout_terr, self.terr_h = prior_terr, playout_terr, terr_h
+        self._scorer, self._ranked = None, ranked_turns
+        if fast and F.AVAILABLE:
+            from . import fast_tree as FT
+            self._ranked = FT.ranked_turns
+            if self.search_belief == 'none' and not team and not cover:
+                self._scorer = (lambda st: FT.det_scores(st, prior_terr, terr_h)) if prior_terr \
+                    else FT.det_scores
+        if playout_terr and not self.fast:
+            raise ValueError('playout_terr needs the compiled playouts (numba, fast=True)')
+        if self._scorer is None and prior_terr:
+            self._scorer = lambda st: P.HeuristicDetectives.scores(st, None, team, cover,
+                                                                   prior_terr, terr_h)
         self.roll_fug = P.vec_heuristic_fugitive()
         self.team, self.cover = team, cover
         self.roll_det = P.vec_heuristic_detective(team=team, cover=cover)
         self.last = {}
+        self.reuse, self.reuse_budget = reuse, reuse_budget
+        self._carry = None  # (public-state signature expected next, node) for reuse
 
     # ---------- belief ----------
 
     def belief_mass(self, s):
-        """belief='model': (N,) probability of each station, zero outside the candidates.
+        """belief 'model' / 'fitted' / 'mix': (N,) probability of each station, zero outside the candidates.
 
         Updated once per new log entry, on the first call after the fugitive's move, when the
         detectives still stand where the fugitive saw them (both halves of a double faced the
         same detectives)."""
         m = s.map
         key = (s.map.key, s.det_start)
+        if self._move_ws is not None:
+            return self._mixture_mass(s, key)
         if self._mem is None or self._mem[0] != key or self._mem[1] > len(s.log):
             mass = np.zeros(m.n)
             mass[m.starts] = 1.0
@@ -233,11 +290,48 @@ class ISMCTSDetectives:
             self._mem = [key, len(s.log), mass]
         return _restrict(mass, E.possible_mask(s))
 
+    def _mixture_mass(self, s, key):
+        """belief 'fitted' / 'mix': _mem = [key, entries done, [mass per model], log posterior]."""
+        m = s.map
+        K = len(self._move_ws)
+        if self._mem is None or self._mem[0] != key or self._mem[1] > len(s.log):
+            mass = np.zeros(m.n)
+            mass[m.starts] = 1.0
+            mass[list(s.det_start)] = 0.0
+            mass /= mass.sum()
+            self._mem = [key, 0, [mass.copy() for _ in range(K)], np.zeros(K)]
+        _, done, masses, logpost = self._mem
+        if done < len(s.log):
+            new = s.log[done:]
+            # the tickets and round before each new entry (detectives as they stand now)
+            tk = list(s.fug_tickets)
+            for t, *_ in new:
+                tk[t] += 1
+            before, rnd = [], s.round - len(new)
+            for t, *_ in new:
+                before.append((tk[:], rnd))
+                tk[t] -= 1
+                rnd += 1
+            masses, logpost = list(masses), logpost.copy()
+            for k, w in enumerate(self._move_ws):
+                masses[k], ev = P.belief_update_joint(
+                    m, masses[k], new,
+                    lambda j, w=w: P.move_odds(m, s.det_pos, s.det_tickets, before[j][0], before[j][1], w),
+                    evidence=True)
+                logpost[k] += ev
+            logpost -= logpost.max()
+            self._mem = [key, len(s.log), masses, logpost]
+        post = np.exp(logpost)
+        post /= post.sum()
+        self.last_posterior = post
+        mix = sum(p * mk for p, mk in zip(post, masses))
+        return _restrict(mix, E.possible_mask(s))
+
     def _sampler(self, s):
         cands = E.possible_locations(s)
         if not cands:
             raise ValueError('no candidate stations for the fugitive')
-        if self.belief == 'model':
+        if self.belief in ('model', 'fitted', 'mix'):
             mass = self.belief_mass(s)  # always, so no log entry is skipped
             if len(cands) == 1:
                 return lambda: cands[0]
@@ -259,7 +353,7 @@ class ISMCTSDetectives:
             node.fug = {}
         fb = node.fug.get(s.fug_pos)
         if fb is None:
-            fb = node.fug[s.fug_pos] = FugBandit(ranked_turns(s))
+            fb = node.fug[s.fug_pos] = FugBandit(self._ranked(s))
         width = min(len(fb.turns), 1 + int(self.widen * math.sqrt(fb.total)))
         pick = -1
         for i in range(width):
@@ -289,7 +383,8 @@ class ISMCTSDetectives:
         while not s.over:
             if s.phase == E.DETECTIVE_PHASE and self.prior == 'heuristic':
                 if node.acts is None:
-                    node.acts, node.prior = heuristic_prior(s, self.prior_temp, mass, self.team, self.cover)
+                    node.acts, node.prior = heuristic_prior(s, self.prior_temp, mass, self.team, self.cover,
+                                                              self._scorer)
                     node.kids = [None] * len(node.acts)
                 sq = math.sqrt(node.n)
                 fpu = node.w / node.n  # unvisited moves start at the parent's value
@@ -359,7 +454,8 @@ class ISMCTSDetectives:
             return wins
         if self.fast:
             from .fast import playout_values
-            vals = playout_values([states[i] for i in live], self.rollout_rounds, self._W)
+            vals = playout_values([states[i] for i in live], self.rollout_rounds, self._W,
+                                  terr=self.playout_terr, terr_h=self.terr_h)
             for j, i in enumerate(live):
                 wins[i] = float(vals[j])
             return wins
@@ -382,12 +478,16 @@ class ISMCTSDetectives:
         if public.phase != E.DETECTIVE_PHASE:
             raise ValueError('choose_move expects a detective to move')
         t0 = time.perf_counter()
-        root = Node()
+        root = self._reused_root(public) if self.reuse != 'none' else None
+        reused = 0 if root is None else root.n
+        if root is None:
+            root = Node()
         sample = self._sampler(public)
         if self.search_belief != 'none':
             root.mass = self.belief_mass(public)
+        budget = self.iterations - (reused if self.reuse_budget == 'total' else 0)
         done = 0
-        while True:
+        while budget > 0:
             leaves = []
             for _ in range(self.batch):
                 s = public.clone()
@@ -403,19 +503,62 @@ class ISMCTSDetectives:
             if self.time_limit is not None:
                 if time.perf_counter() - t0 >= self.time_limit:
                     break
-            elif done >= self.iterations:
+            elif done >= budget:
                 break
             if self._root_moves(root) == 1:
                 break  # only one legal move
         kids = self._root_children(root)
+        if not kids:  # reused root with no explored move and no budget left
+            return self._fresh_move(public)
         best = max(kids, key=lambda kv: kv[1].n)
+        if self.reuse != 'none':
+            self._remember(public, best)
         self.last = {
-            'iterations': done, 'time': time.perf_counter() - t0,
+            'iterations': done, 'reused': reused, 'time': time.perf_counter() - t0,
             'value': best[1].w / best[1].n,
             'children': sorted(((a, ch.n, round(ch.w / ch.n, 3)) for a, ch in kids), key=lambda x: -x[1]),
             'prior': dict(zip(root.acts, root.prior)) if root.acts is not None else {},
         }
         return best[0]
+
+    # ---------- tree reuse ----------
+
+    @staticmethod
+    def _sig(s):
+        return (s.map.key, s.det_start, tuple(s.det_pos), tuple(tuple(t) for t in s.det_tickets),
+                s.round, len(s.log), s.current, s.phase)
+
+    def _remember(self, public, best):
+        """Keeps the chosen move's subtree, with the public state it expects next."""
+        (to, t), node = best
+        after = public.clone()
+        E.move_detective(after, to, t, check=False)
+        self._carry = None if after.over else (after, node)
+
+    def _reused_root(self, public):
+        carry, self._carry = self._carry, None
+        if carry is None:
+            return None
+        after, node = carry
+        if after.phase == E.DETECTIVE_PHASE:
+            return node if self._sig(after) == self._sig(public) else None
+        if self.reuse != 'game':
+            return None
+        # the round ended in the tree: follow the fugitive's observed turn
+        moves = len(public.log) - len(after.log)
+        if (moves not in (1, 2) or public.log[:len(after.log)] != after.log
+                or tuple(public.det_pos) != tuple(after.det_pos)
+                or [list(x) for x in public.det_tickets] != [list(x) for x in after.det_tickets]):
+            return None
+        key = tuple((t, p if rev else -1) for (t, p, rev, _) in public.log[-moves:])
+        return node.children.get(key)
+
+    def _fresh_move(self, public):
+        saved, self.reuse = self.reuse, 'none'
+        try:
+            return self.choose_move(public)
+        finally:
+            self.reuse = saved
 
     @staticmethod
     def _root_children(root):

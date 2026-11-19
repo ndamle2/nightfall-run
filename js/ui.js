@@ -10,12 +10,48 @@
   let ADJ = null;
   const SAVE_KEY = 'nightfall-run:save:v1';
   const PREF_KEY = 'nightfall-run:prefs:v1';
+  const RECORDS_KEY = 'nightfall-run:records:v1'; // human-vs-bot games kept in the browser
+  const MAX_LOCAL_RECORDS = 300;
+
+  // ---------- computer players ----------
+  // Served by `python3 -m ai.serve`, the page asks the Python bots for moves (and the server
+  // saves every human-vs-bot game to data/games/). Opened from disk, it uses the simpler
+  // bots in js/bots.js and keeps game records in the browser for download.
+  const PLAY_MODES = {
+    hotseat: 'Pass and play: everyone at this computer',
+    'human-fugitive': 'Play the fugitive against computer detectives',
+    'human-detectives': 'Play the detectives against a computer fugitive',
+  };
+  let server = null; // null while unknown, then true / false
+  let serverBots = null;
+  let botCtx = null; // js/bots.js context for the current map
+  let botRun = 0; // bumped to cancel a bot turn in progress
+  let turnReadyAt = Date.now(); // when the current move could first be made (thinking time)
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const BOT_STEP_MS = 450; // minimum time each bot move stays on screen
+  // post-game review (ai/review.py via the server): {id, status, data}; shown on the board
+  let review = { id: null, status: 'idle', data: null };
+  let reviewOpen = false;
+
+  // How often the detectives win, by city and number of detectives: computer vs computer
+  // (ISMCTS detectives against the alpha-beta fugitive; 228 games per cell for 3-5 detectives,
+  // so about ±5-6 points; 48 games for 2),
+  // measured November 2026 on the current cities (README, "Balance"). Regenerate a city and
+  // these need re-measuring.
+  const CITY_BALANCE = {
+    twin: { 2: 6, 3: 28, 4: 65, 5: 83 },
+    harbour: { 2: 0, 3: 11, 4: 36, 5: 54 },
+    quarter: { 2: 4, 3: 25, 4: 57, 5: 82 },
+    market: { 2: 0, 3: 18, 4: 59, 5: 83 },
+    hill: { 2: 0, 3: 24, 4: 55, 5: 79 },
+  };
+  const CITY_NOTE = { harbour: 'hardest for the detectives' };
 
   const DET_PRESETS = [
     { name: 'Blue', color: '#2f6fd0' },
     { name: 'Orange', color: '#e07a1f' },
     { name: 'Violet', color: '#8657c6' },
-    { name: 'Teal', color: '#12958a' },
+    { name: 'Brown', color: '#8a5a2e' }, // no line, ticket or station uses brown
     { name: 'Rose', color: '#cf4a8c' },
   ];
   const FUG_COLOR = '#2e2c2a';
@@ -62,6 +98,7 @@
       if (!EDGES_BY_PAIR.has(k)) EDGES_BY_PAIR.set(k, []);
       EDGES_BY_PAIR.get(k).push(e);
     }
+    botCtx = null; // built on first use
     if (board) board.setMap(MAP);
     else board = new BoardView($('#board'), MAP);
     const sub = document.querySelector('.brand .sub');
@@ -110,6 +147,251 @@
     try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
   }
 
+  // ---------- game records (human vs bot) ----------
+  const playMode = () => (game && game.meta && game.meta.mode) || 'hotseat';
+  const humanIs = (side) => playMode() === `human-${side}`;
+  const vsBot = () => playMode() !== 'hotseat';
+
+  function newGameId() {
+    const rnd = Math.random().toString(36).slice(2, 10);
+    return `${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${rnd}`;
+  }
+
+  /** Appends an action to the game's history (kept inside the state, so undo and saves
+   * carry it). by: 'human' | 'server' | 'browser'; ms: thinking time. */
+  function record(action, by, ms) {
+    if (!game.history) game.history = [];
+    const now = Date.now();
+    game.history.push({ ...action, by, ms: ms != null ? ms : now - turnReadyAt });
+    turnReadyAt = now;
+  }
+
+  function buildRecord() {
+    return {
+      schema: 1,
+      app: 'nightfall-run',
+      id: game.meta.id,
+      mode: game.meta.mode,
+      map: gameMapKey,
+      mapSeed: MAPS[gameMapKey].seed,
+      detectives: game.detectives.length,
+      fugitiveStart: game.fugitive.start,
+      detectiveStarts: game.detectives.map((d) => d.start),
+      history: game.history || [],
+      bots: { engine: server ? 'server' : 'browser', ...(server && serverBots ? serverBots : {}) },
+      result: game.winner ? { winner: game.winner, reason: game.reason, round: game.round } : null,
+      created: game.meta.created,
+      updated: new Date().toISOString(),
+    };
+  }
+
+  function localRecords() {
+    try { return JSON.parse(localStorage.getItem(RECORDS_KEY)) || []; } catch (e) { return []; }
+  }
+  function storeLocalRecord(rec) {
+    try {
+      const list = localRecords().filter((r) => r.id !== rec.id);
+      list.push(rec);
+      localStorage.setItem(RECORDS_KEY, JSON.stringify(list.slice(-MAX_LOCAL_RECORDS)));
+    } catch (e) { /* storage full or blocked: the game still works */ }
+  }
+
+  /** Saves the game's record (against the computer or pass and play): to the server when
+   * there is one, else in the browser. */
+  function saveRecord() {
+    if (!game || !game.meta) return;
+    const rec = buildRecord();
+    if (server) {
+      fetch('api/record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: rec }) })
+        .then((r) => { if (!r.ok) throw new Error(); })
+        .catch(() => storeLocalRecord(rec));
+    } else storeLocalRecord(rec);
+  }
+
+  function downloadRecords() {
+    const blob = new Blob([JSON.stringify(localRecords(), null, 1)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `nightfall-run-games-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  /** Finds out whether the page is served by ai.serve; if so, hands it any records the
+   * browser kept while it ran without the server. */
+  async function detectServer() {
+    if (!/^https?:$/.test(location.protocol)) { server = false; return; }
+    try {
+      const r = await fetch('api/ping', { cache: 'no-store' });
+      const d = await r.json();
+      server = !!d.ok;
+      serverBots = d.bots || null;
+    } catch (e) {
+      server = false;
+    }
+    if (server) {
+      const pending = localRecords();
+      const left = [];
+      for (const rec of pending) {
+        try {
+          const r = await fetch('api/record', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: rec }) });
+          if (!r.ok) left.push(rec);
+        } catch (e) { left.push(rec); }
+      }
+      try {
+        if (left.length) localStorage.setItem(RECORDS_KEY, JSON.stringify(left));
+        else localStorage.removeItem(RECORDS_KEY);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  /** Asks the server to review the finished game (once per game). */
+  function requestReview() {
+    if (!game || !game.meta || review.id === game.meta.id) return;
+    const id = game.meta.id;
+    if (!server) { review = { id, status: 'unavailable', data: null }; return; }
+    review = { id, status: 'loading', data: null };
+    fetch('api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ record: buildRecord() }) })
+      .then((r) => r.json().then((d) => { if (!r.ok) throw new Error(d.error || 'review failed'); return d; }))
+      .then((d) => { if (review.id === id) review = { id, status: 'ready', data: d }; })
+      .catch((e) => { if (review.id === id) review = { id, status: 'error', data: e.message }; })
+      .finally(() => { if (review.id === id) renderReview(); });
+  }
+
+  const VERDICT = {
+    best: ['Good', 'good'], ok: ['OK', 'ok'], weak: ['Weak', 'weak'], blunder: ['Mistake', 'bad'],
+    lost: ['Lost', 'lost'], unusual: ['Unusual', 'ok'],
+  };
+  const fmtTurn = (t) => (t.double ? '2× ' : '') + t.moves.map((m) => `${TICKETS[m.ticket].label} ${m.to}`).join(', ');
+
+  function renderReview() {
+    const el = $('#review');
+    if (!el) return;
+    const show = mode === 'over' && reviewOpen && game && game.meta && review.id === game.meta.id;
+    el.classList.toggle('hidden', !show);
+    if (!show) return;
+    let body = '';
+    if (review.status === 'loading') body = '<p class="hint">Reviewing your game…</p>';
+    else if (review.status === 'unavailable') body = '<p class="hint">The game review needs the Python bots: run <code>python3 -m ai.serve</code> and play from the address it prints.</p>';
+    else if (review.status === 'error') body = `<p class="hint">The review failed: ${esc(review.data)}</p>`;
+    else if (review.status === 'ready') {
+      const d = review.data;
+      if (d.side === 'both') {
+        body += `<h3>For ${esc(game.fugitive.name)}</h3>` + reviewPart(d.fugitive, false) +
+          '<h3>For the detectives</h3>' + reviewPart(d.detectives, false);
+      } else body += reviewPart(d, true);
+    }
+    el.innerHTML = `<h2>Game review</h2>${body}`;
+    el.querySelectorAll('tr[data-at]').forEach((tr) =>
+      tr.addEventListener('click', () => board.centerOn(Number(tr.dataset.at))));
+  }
+
+  /** One side's lessons and table. you: the reader played this side alone against the computer. */
+  function reviewPart(d, you) {
+    let body = '<ul class="lessons">' + d.lessons.map((l) => `<li>${esc(l)}</li>`).join('') + '</ul>';
+    const me = you ? 'You' : d.side === 'fugitive' ? 'Fugitive' : 'Detectives';
+    {
+      if (d.side === 'fugitive') {
+        body += `<details open><summary>Move by move <span class="fineprint">(click a row to show the station)</span></summary>
+          <table class="review-table"><tr><th>Move</th><th>${me}</th><th>Bot</th><th></th><th title="moves to the nearest detective">Near</th><th title="stations you could reach before any detective">Room</th><th title="stations the detectives had to consider">Cands</th></tr>` +
+          d.turns.map((t) => {
+            const [label, cls] = VERDICT[t.verdict] || ['', ''];
+            const mv = t.last > t.move ? `${t.move}–${t.last}` : `${t.move}`;
+            return `<tr data-at="${t.at}" title="${esc(t.why)}"><td>${mv}${t.reveal ? ' 👁' : ''}</td><td>${esc(fmtTurn(t.you))}</td>
+              <td>${t.same ? '=' : esc(fmtTurn(t.bot))}</td><td><span class="verdict ${cls}">${label}</span></td>
+              <td>${t.nearest ?? '–'}</td><td>${t.room ?? '–'}</td><td>${t.candidates ?? '–'}</td></tr>`;
+          }).join('') + '</table></details>';
+      } else {
+        body += `<details open><summary>Round by round <span class="fineprint">(click a row to show where the fugitive was)</span></summary>
+          <table class="review-table"><tr><th>After</th><th>Fugitive</th><th>${you ? 'Your moves' : 'Detectives'}</th><th>Bot</th></tr>` +
+          d.rounds.map((r) => `<tr data-at="${r.fugitive_at}"><td>${r.move}</td><td>${r.fugitive_at} <span class="fineprint">(${r.candidates} possible)</span></td>
+            <td>${r.moves.map((m) => `<span class="${m.missed_catch ? 'verdict bad' : m.caught ? 'verdict good' : ''}">${m.detective}: ${m.to}</span>`).join(' ')}</td>
+            <td>${r.moves.map((m) => (m.same ? '=' : m.bot.to)).join(' ')}</td></tr>`).join('') + '</table></details>';
+      }
+    }
+    return body;
+  }
+
+  /** The bot's next actions: the fugitive's whole turn, or the current detective's move. */
+  async function botActions() {
+    if (server) {
+      try {
+        const r = await fetch('api/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ record: buildRecord() }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'bot error');
+        return d.actions.map((a) => ({ ...a, by: 'server', ms: d.ms }));
+      } catch (e) {
+        server = false;
+        toast('Lost the bot server; the basic in-browser bots take over.', 5000);
+      }
+    }
+    if (!botCtx) botCtx = Bots.context(MAP, ADJ);
+    const t0 = Date.now();
+    const acts = game.phase === 'fugitive'
+      ? Bots.fugitiveTurn(game, botCtx).map((a) => ({ side: 'F', ...a }))
+      : [{ side: 'D', i: game.current, ...Bots.detectiveMove(game, botCtx) }];
+    return acts.map((a) => ({ ...a, by: 'browser', ms: Date.now() - t0 }));
+  }
+
+  /** Plays one bot action on the game through the engine (which checks it is legal). */
+  function applyBotAction(a) {
+    const { by, ms, ...act } = a;
+    if (act.type === 'double') E.useDouble(game);
+    else if (act.side === 'F') E.moveFugitive(game, ADJ, act.to, act.ticket);
+    else {
+      if (act.i !== game.current) throw new Error('bot moved out of turn');
+      E.moveDetective(game, ADJ, act.to, act.ticket);
+    }
+    record(act, by, ms);
+  }
+
+  async function runBotTurn() {
+    const run = ++botRun;
+    const g = game;
+    const alive = () => run === botRun && game === g && !game.winner;
+    const side = game.phase === 'fugitive' ? 'fugitive' : 'detectives';
+    while (alive() && (side === 'fugitive' ? game.phase === 'fugitive' : game.phase === 'detectives')) {
+      const t0 = Date.now();
+      let acts;
+      try {
+        acts = await botActions();
+      } catch (e) {
+        toast(`The computer ${side} could not move: ${e.message}`, 6000);
+        return;
+      }
+      if (!alive()) return;
+      for (const a of acts) {
+        try {
+          applyBotAction(a);
+        } catch (e) {
+          // a server answer the browser's engine rejects: use the local bots from here
+          server = false;
+          toast('The bot server sent an illegal move; the basic in-browser bots take over.', 6000);
+          break;
+        }
+      }
+      const wait = BOT_STEP_MS - (Date.now() - t0);
+      if (side === 'detectives') {
+        render();
+        if (wait > 0) await sleep(wait);
+      }
+    }
+    if (run !== botRun || game !== g) return; // cancelled (new game, resume, …)
+    turnReadyAt = Date.now();
+    saveRecord();
+    if (game.winner) return enterMode('over');
+    if (side === 'fugitive') {
+      enterMode('detectives');
+      announceFugitiveTurn();
+    } else beginFugitiveTurn();
+  }
+
   // ---------- modal helpers ----------
   function openModal(html, { opaque = false } = {}) {
     $('#modal').innerHTML = html;
@@ -131,8 +413,12 @@
 
   // ---------- setup ----------
   function showSetup() {
+    botRun++;
     mode = 'setup';
     closePicker();
+    // every new game starts in a random city (the list still lets you pick)
+    useMap(MAP_KEYS[Math.floor(Math.random() * MAP_KEYS.length)]);
+    if (game) { board.setPieces([]); board.setHighlights([], '#000'); board.setCandidates([]); board.setRoute(null, null); }
     const saved = loadSave();
     const resumable = saved && saved.game.phase !== 'over';
     openModal(`
@@ -144,7 +430,14 @@
         <select id="map-pick">
           ${MAP_KEYS.map((k) => `<option value="${k}" ${k === MAP_KEY ? 'selected' : ''}>${esc(MAPS[k].name)}</option>`).join('')}
         </select>
-        <span></span><span class="fineprint" id="city-blurb">${esc(MAP.blurb || '')}</span>
+        <span></span><span class="fineprint"><span id="city-blurb">${esc(MAP.blurb || '')}</span>
+          <a href="#" id="balance-link" class="balance-link">How hard is each city?</a></span>
+        <span></span><div id="balance-pop" class="balance-pop hidden"></div>
+        <label for="play-mode">Players</label>
+        <select id="play-mode">
+          ${Object.entries(PLAY_MODES).map(([k, label]) => `<option value="${k}" ${k === (prefs.playMode || 'hotseat') ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+        </select>
+        <span></span><span class="fineprint" id="bot-note"></span>
         <label for="f-name">Fugitive</label>
         <input type="text" id="f-name" value="The Fugitive" maxlength="20">
         <label for="n-det">Detectives</label>
@@ -159,16 +452,62 @@
         <button class="btn big" id="btn-start">Start game</button>
         ${resumable ? `<button class="btn ghost big" id="btn-resume">Resume saved game in ${esc(MAPS[saved.mapKey].name)} (move ${saved.game.round}/24)</button>` : ''}
         ${game ? '<button class="btn ghost big" id="btn-cancel">Cancel</button>' : ''}
-      </div>`);
+      </div>
+      <p class="fineprint" id="records-note"></p>`);
+    const renderBotNote = () => {
+      const pm = $('#play-mode').value;
+      const note = $('#bot-note');
+      if (pm === 'hotseat') note.textContent = '';
+      else if (server === null) note.textContent = 'Checking for the bot server…';
+      else if (server) note.textContent = 'Computer players: the full-strength bots from the Python server. This game is recorded to data/games/.';
+      else note.innerHTML = 'Computer players: the basic bots built into the page. For the strong bots, run <code>python3 -m ai.serve</code> in the game folder and play at the address it prints.';
+      const n = localRecords().length;
+      $('#records-note').innerHTML = !server && n
+        ? `${n} game${n > 1 ? 's' : ''} against the computer recorded in this browser. <a href="#" id="dl-records">Download the records</a>`
+        : '';
+      const dl = $('#dl-records');
+      if (dl) dl.addEventListener('click', (e) => { e.preventDefault(); downloadRecords(); });
+    };
+    $('#play-mode').addEventListener('change', () => {
+      prefs.playMode = $('#play-mode').value;
+      savePrefs();
+      renderBotNote();
+    });
+    renderBotNote();
+    if (server === null) serverReady.then(() => { if (mode === 'setup' && $('#bot-note')) renderBotNote(); });
     const renderNames = () => {
       const n = Number($('#n-det').value);
       $('#det-names').innerHTML = DET_PRESETS.slice(0, n)
-        .map((d, i) => `<label><span class="dot" style="background:${d.color}"></span></label>
+        .map((d, i) => `<label><span class="dot shield" style="background:${d.color}"></span></label>
           <input type="text" id="d-name-${i}" value="Detective ${d.name}" maxlength="20">`)
         .join('');
     };
     $('#n-det').addEventListener('change', renderNames);
     renderNames();
+    const renderBalance = () => {
+      const n = Number($('#n-det').value);
+      const counts = [2, 3, 4, 5];
+      $('#balance-pop').innerHTML = `
+        <div class="bp-title">How often the detectives win</div>
+        <table class="bp-table"><tr><th>City</th>${counts.map((c) => `<th class="${c === n ? 'sel' : ''}">${c} det.</th>`).join('')}</tr>
+        ${MAP_KEYS.filter((k) => CITY_BALANCE[k]).map((k) => `<tr data-city="${k}" class="${k === MAP_KEY ? 'sel' : ''}">
+          <td>${esc(MAPS[k].name)}${CITY_NOTE[k] ? `<div class="bp-note">${CITY_NOTE[k]}</div>` : ''}</td>
+          ${counts.map((c) => `<td class="${c === n ? 'sel' : ''}">${CITY_BALANCE[k][c]}%</td>`).join('')}</tr>`).join('')}
+        </table>
+        <p class="fineprint">The computer playing both sides at full strength. Against a person the fugitive usually does worse,
+        so as the fugitive try fewer detectives. Click a city to choose it.</p>`;
+      $('#balance-pop').querySelectorAll('tr[data-city]').forEach((tr) => tr.addEventListener('click', () => {
+        $('#map-pick').value = tr.dataset.city;
+        $('#map-pick').dispatchEvent(new Event('change'));
+      }));
+    };
+    $('#balance-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      const pop = $('#balance-pop');
+      pop.classList.toggle('hidden');
+      if (!pop.classList.contains('hidden')) renderBalance();
+    });
+    $('#n-det').addEventListener('change', () => { if (!$('#balance-pop').classList.contains('hidden')) renderBalance(); });
     $('#map-pick').addEventListener('change', () => {
       // preview the city on the board behind the dialog
       useMap($('#map-pick').value);
@@ -176,6 +515,7 @@
       savePrefs();
       $('#city-name').textContent = MAP.name;
       $('#city-blurb').textContent = MAP.blurb || '';
+      if (!$('#balance-pop').classList.contains('hidden')) renderBalance();
       if (game) { board.setPieces([]); board.setHighlights([], '#000'); board.setCandidates([]); board.setRoute(null, null); }
     });
     $('#btn-start').addEventListener('click', () => {
@@ -184,7 +524,7 @@
         name: ($(`#d-name-${i}`).value || `Detective ${d.name}`).trim(),
         color: d.color,
       }));
-      startGame({ fugitiveName: ($('#f-name').value || 'The Fugitive').trim(), detectives });
+      startGame({ fugitiveName: ($('#f-name').value || 'The Fugitive').trim(), detectives }, $('#play-mode').value);
     });
     if (resumable) $('#btn-resume').addEventListener('click', () => resume(saved));
     if (game) {
@@ -198,22 +538,58 @@
   }
   let lastModeBeforeSetup = null;
 
-  function startGame(cfg) {
+  function startGame(cfg, pm = 'hotseat') {
+    botRun++;
+    reviewOpen = false;
     gameMapKey = MAP_KEY;
     game = E.createGame(MAP, ADJ, cfg);
+    game.meta = { id: newGameId(), mode: pm, created: new Date().toISOString() };
+    game.history = [];
     undoStack = [];
     turnSnapshot = null;
     board.fit();
     if (game.phase === 'over') return enterMode('over');
-    enterMode('handoff-fugitive');
+    beginFugitiveTurn();
   }
 
   function resume(saved) {
+    botRun++;
+    reviewOpen = false;
     useMap(saved.mapKey);
     gameMapKey = MAP_KEY;
     game = saved.game;
     undoStack = [];
-    enterMode(saved.mode === 'fugitive' ? 'handoff-fugitive' : saved.mode);
+    let m = saved.mode === 'fugitive' ? 'handoff-fugitive' : saved.mode;
+    if (vsBot() && game.phase !== 'over') {
+      // no curtains against the computer: go straight to whoever is to move
+      if (game.phase === 'fugitive') m = humanIs('fugitive') ? 'fugitive-turn' : 'bot-fugitive';
+      else m = humanIs('detectives') ? 'detectives' : 'bot-detectives';
+    }
+    if (m === 'fugitive-turn') return beginFugitiveTurn();
+    enterMode(m);
+  }
+
+  /** The start of the fugitive's turn: a curtain in pass-and-play, the bot, or straight to the human. */
+  function beginFugitiveTurn() {
+    if (game.winner) return enterMode('over');
+    if (playMode() === 'hotseat') return enterMode('handoff-fugitive');
+    if (humanIs('detectives')) return enterMode('bot-fugitive');
+    turnSnapshot = E.clone(game);
+    turnReadyAt = Date.now();
+    enterMode('fugitive');
+  }
+
+  /** After the fugitive's turn: tell the detectives which tickets it used (and any reveal). */
+  function announceFugitiveTurn() {
+    const lastEntry = game.log[game.log.length - 1];
+    if (!lastEntry) return;
+    const moves = game.log.slice(lastEntry.double ? -2 : -1);
+    const desc = moves.map((e) => TICKETS[e.ticket].label).join(' then ');
+    const reveal = moves.filter((e) => e.reveal).pop();
+    if (reveal) {
+      toast(`The fugitive moved (${desc}) and was spotted at station ${reveal.pos}!`, 6000);
+      board.centerOn(reveal.pos);
+    } else toast(`The fugitive moved: ${desc}${moves.length > 1 ? ' (double move)' : ''}.`, 4500);
   }
 
   // ---------- mode transitions ----------
@@ -236,12 +612,20 @@
         </div>`, { opaque: true });
       $('#btn-go').addEventListener('click', () => {
         turnSnapshot = E.clone(game);
+        turnReadyAt = Date.now();
         closeModal();
         enterMode('fugitive');
       });
       return;
     }
+    if (m === 'bot-fugitive' || m === 'bot-detectives') {
+      closeModal();
+      render();
+      runBotTurn();
+      return;
+    }
     if (m === 'fugitive') {
+      closeModal();
       render();
       board.centerOn(game.fugitive.pos);
       return;
@@ -273,11 +657,16 @@
       return;
     }
     if (m === 'detectives') {
+      closeModal();
       undoStack = [];
+      turnReadyAt = Date.now();
       render();
       return;
     }
     if (m === 'over') {
+      botRun++;
+      saveRecord();
+      requestReview();
       render();
       showGameOver();
       return;
@@ -294,11 +683,15 @@
         <p class="fineprint">The fugitive's full route is now drawn on the map.</p>
         <div class="row" style="justify-content:center">
           <button class="btn big" id="btn-again">New game</button>
-          <button class="btn ghost big" id="btn-view">View the board</button>
+          <button class="btn ghost big" id="btn-view">${game.meta ? 'View the board and review' : 'View the board'}</button>
         </div>
       </div>`);
     $('#btn-again').addEventListener('click', () => { clearSave(); game = null; showSetup(); });
-    $('#btn-view').addEventListener('click', closeModal);
+    $('#btn-view').addEventListener('click', () => {
+      closeModal();
+      reviewOpen = true;
+      renderReview();
+    });
   }
 
   // ---------- board interaction ----------
@@ -309,6 +702,7 @@
       if (!mv) return;
       chooseTicket(mv, game.fugitive.tickets, cx, cy, (t) => {
         E.moveFugitive(game, ADJ, id, t);
+        record({ side: 'F', to: id, ticket: t }, 'human');
         render();
       });
     } else if (mode === 'detectives' && game.phase === 'detectives') {
@@ -317,7 +711,9 @@
       if (!mv) return;
       chooseTicket(mv, d.tickets, cx, cy, (t) => {
         undoStack.push(E.clone(game));
+        const i = game.current;
         E.moveDetective(game, ADJ, id, t);
+        record({ side: 'D', i, to: id, ticket: t }, 'human');
         if (game.winner) return enterMode('over');
         render();
       });
@@ -363,15 +759,17 @@
       $('#players').innerHTML = '';
       $('#log').innerHTML = '';
       $('#notices').innerHTML = '';
+      renderReview();
       return;
     }
-    const showFugitive = mode === 'fugitive' || mode === 'over';
+    // the human fugitive always sees itself; a computer fugitive is shown only at the end
+    const showFugitive = mode === 'fugitive' || mode === 'over' || (humanIs('fugitive') && mode !== 'setup');
     const pieces = game.detectives.map((d, i) => ({
       pos: d.pos,
       color: d.color,
       badge: String(i + 1),
       kind: 'detective',
-      active: mode === 'detectives' && game.phase === 'detectives' && game.current === i,
+      active: (mode === 'detectives' || mode === 'bot-detectives') && game.phase === 'detectives' && game.current === i,
     }));
     if (showFugitive) {
       pieces.push({ pos: game.fugitive.pos, color: FUG_COLOR, badge: 'F', kind: 'fugitive', active: mode === 'fugitive' });
@@ -394,7 +792,7 @@
     board.setLegalRoutes(from ? legalRoutes(from, moves) : null);
 
     board.setCandidates(
-      prefs.showPossible && (mode === 'detectives' || mode === 'handoff-fugitive') && game.phase !== 'over'
+      prefs.showPossible && ['detectives', 'handoff-fugitive', 'bot-fugitive', 'bot-detectives'].includes(mode) && game.phase !== 'over'
         ? E.possibleLocations(game, ADJ, MAP)
         : []
     );
@@ -402,6 +800,8 @@
     const last = E.lastReveal(game);
     if (mode === 'over') {
       board.setRoute(null, [game.fugitive.start, ...game.log.map((e) => e.pos)]);
+    } else if (humanIs('fugitive')) {
+      board.setRoute(null, [game.fugitive.start, ...game.log.map((e) => e.pos)]); // your own route so far
     } else {
       board.setRoute(last && mode !== 'fugitive' ? { pos: last.pos, round: last.round } : null, null);
     }
@@ -410,6 +810,7 @@
     renderPlayers();
     renderLog();
     renderNotices();
+    renderReview();
     save();
   }
 
@@ -423,14 +824,17 @@
     if (mode === 'over') {
       who = game.winner === 'fugitive' ? `🌙 ${esc(game.fugitive.name)} escaped` : '🔦 Detectives win';
       hint = esc(game.reason);
-      actions = '<button class="btn" id="a-new">New game</button><button class="btn ghost" id="a-result">Show result</button>';
+      actions = '<button class="btn" id="a-new">New game</button><button class="btn ghost" id="a-result">Show result</button>' +
+        (game.meta ? '<button class="btn ghost" id="a-review">Review</button>' : '');
     } else if (mode === 'fugitive') {
       who = `<span class="dot" style="background:${FUG_COLOR}"></span>${esc(game.fugitive.name)}`;
       const done = game.phase !== 'fugitive';
       if (game.winner) {
         hint = 'You are trapped. Undo to try a different route, or confirm to end the game.';
       } else if (done) {
-        hint = `You're now at <b>${game.fugitive.pos}</b>. Confirm to hide the board and pass to the detectives.`;
+        hint = vsBot()
+          ? `You're now at <b>${game.fugitive.pos}</b>. Confirm to end your turn.`
+          : `You're now at <b>${game.fugitive.pos}</b>. Confirm to hide the board and pass to the detectives.`;
       } else if (game.double === 'second') {
         hint = `Double move, step 2 of 2. You're at <b>${game.fugitive.pos}</b>. Pick your next station.`;
       } else if (game.double === 'first') {
@@ -442,19 +846,26 @@
       actions =
         (E.canUseDouble(game) ? `<button class="btn double" id="a-double">Play double move (${game.fugitive.tickets.double})</button>` : '') +
         `<button class="btn ghost" id="a-undo" ${changed ? '' : 'disabled'}>Undo</button>` +
-        `<button class="btn" id="a-confirm" ${done || game.winner ? '' : 'disabled'}>Confirm &amp; hide</button>`;
+        `<button class="btn" id="a-confirm" ${done || game.winner ? '' : 'disabled'}>${vsBot() ? 'Confirm' : 'Confirm &amp; hide'}</button>`;
     } else if (mode === 'detectives') {
       if (game.phase === 'detectives') {
         const d = game.detectives[game.current];
-        who = `<span class="dot" style="background:${d.color}"></span>${esc(d.name)}`;
+        who = `<span class="dot shield" style="background:${d.color}"></span>${esc(d.name)}`;
         hint = `At station <b>${d.pos}</b>. Click a highlighted station to move. Drag to pan, scroll to zoom.`;
       } else {
         who = 'Detectives done';
-        hint = 'Every detective has moved. Pass the computer to the fugitive.';
+        hint = vsBot() ? 'Every detective has moved. End the turn to let the fugitive move.' : 'Every detective has moved. Pass the computer to the fugitive.';
       }
       actions =
         `<button class="btn ghost" id="a-undo" ${undoStack.length ? '' : 'disabled'}>Undo last move</button>` +
-        (game.phase === 'fugitive' ? '<button class="btn" id="a-pass">Pass to the fugitive</button>' : '');
+        (game.phase === 'fugitive' ? `<button class="btn" id="a-pass">${vsBot() ? 'End the detectives’ turn' : 'Pass to the fugitive'}</button>` : '');
+    } else if (mode === 'bot-fugitive') {
+      who = `<span class="dot" style="background:${FUG_COLOR}"></span>${esc(game.fugitive.name)} (computer)`;
+      hint = 'The fugitive is making its move…';
+    } else if (mode === 'bot-detectives') {
+      const d = game.phase === 'detectives' ? game.detectives[game.current] : null;
+      who = d ? `<span class="dot shield" style="background:${d.color}"></span>${esc(d.name)} (computer)` : 'Computer detectives';
+      hint = 'The detectives are thinking…';
     } else {
       who = 'Waiting…';
       hint = 'Follow the on-screen instructions.';
@@ -464,16 +875,24 @@
       <div class="hint">${hint}</div><div class="actions">${actions}</div>`;
 
     const on = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
-    on('a-double', () => { E.useDouble(game); render(); });
+    on('a-double', () => { E.useDouble(game); record({ side: 'F', type: 'double' }, 'human'); render(); });
     on('a-undo', () => {
       if (mode === 'fugitive') game = E.clone(turnSnapshot);
       else if (undoStack.length) game = undoStack.pop();
       render();
     });
-    on('a-confirm', () => enterMode(game.winner ? 'over' : 'handoff-detectives'));
-    on('a-pass', () => enterMode('handoff-fugitive'));
+    on('a-confirm', () => {
+      if (game.winner) return enterMode('over');
+      if (vsBot()) { saveRecord(); return enterMode('bot-detectives'); }
+      enterMode('handoff-detectives');
+    });
+    on('a-pass', () => {
+      if (vsBot()) { saveRecord(); return enterMode('bot-fugitive'); }
+      enterMode('handoff-fugitive');
+    });
     on('a-new', () => { clearSave(); game = null; showSetup(); });
     on('a-result', showGameOver);
+    on('a-review', () => { reviewOpen = true; requestReview(); renderReview(); });
   }
 
   function ticketChips(t, keys) {
@@ -482,18 +901,18 @@
 
   function renderPlayers() {
     const last = E.lastReveal(game);
-    const fWhere = mode === 'fugitive' || mode === 'over'
+    const fWhere = mode === 'fugitive' || mode === 'over' || humanIs('fugitive')
       ? `At ${game.fugitive.pos}`
       : last ? `Last seen at ${last.pos} (move ${last.round})` : 'Not yet seen';
-    let html = `<div class="player ${mode === 'fugitive' ? 'current' : ''}" style="--pc:${FUG_COLOR}">
+    let html = `<div class="player ${mode === 'fugitive' || mode === 'bot-fugitive' ? 'current' : ''}" style="--pc:${FUG_COLOR}">
       <span class="dot" style="background:${FUG_COLOR}"></span>
       <div><div class="name">${esc(game.fugitive.name)}</div><div class="where">${fWhere}</div></div>
       <div class="tickets">${ticketChips(game.fugitive.tickets, ['cab', 'tram', 'metro', 'secret', 'double'])}</div>
     </div>`;
     game.detectives.forEach((d, i) => {
-      const cur = mode === 'detectives' && game.phase === 'detectives' && game.current === i;
+      const cur = (mode === 'detectives' || mode === 'bot-detectives') && game.phase === 'detectives' && game.current === i;
       html += `<div class="player ${cur ? 'current' : ''}" style="--pc:${d.color}">
-        <span class="dot" style="background:${d.color}"></span>
+        <span class="dot shield" style="background:${d.color}">${i + 1}</span>
         <div><div class="name">${esc(d.name)}</div><div class="where">At ${d.pos}</div></div>
         <div class="tickets">${ticketChips(d.tickets, ['cab', 'tram', 'metro'])}</div>
       </div>`;
@@ -502,7 +921,7 @@
   }
 
   function renderLog() {
-    const showAll = mode === 'fugitive' || mode === 'over';
+    const showAll = mode === 'fugitive' || mode === 'over' || humanIs('fugitive');
     let html = '';
     for (let r = 1; r <= E.MAX_ROUNDS; r++) {
       const e = game.log[r - 1];
@@ -594,6 +1013,7 @@
     if (game) render();
   });
 
+  const serverReady = detectServer();
   render();
   showSetup();
 })();

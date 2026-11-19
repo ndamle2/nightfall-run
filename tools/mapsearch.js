@@ -7,6 +7,8 @@
  *   --layout key   keep a hand-made layout from tools/layouts.js fixed (river, parks, districts)
  *                  and search only seeds and the remaining settings
  *   --write file   write the best map (passing the standard, if any does) to file.js
+ *   --no-cross     lines of a kind never pass through the same station (no crossings), and
+ *                  the standard requires none
  *
  * Phase 1 samples random settings and seeds; phase 2 perturbs the best few. Prints the top
  * candidates with their stats and the command that regenerates each. Nothing in js/ is written.
@@ -28,6 +30,7 @@ const opt = (f) => (args.includes(f) ? args[args.indexOf(f) + 1] : null);
 const OUT = opt('--out');
 const WRITE = opt('--write');
 const LAYOUT = opt('--layout');
+const NO_CROSS = args.includes('--no-cross');
 if (LAYOUT && !LAYOUTS[LAYOUT]) { console.error(`unknown layout ${LAYOUT}`); process.exit(1); }
 const target = computeStats(loadTextMap(syDir));
 
@@ -86,6 +89,7 @@ const STANDARD = {
   metroStops: [12, 16],
   startGap: [t.startGap - 0.25, t.startGap + 0.25],
   startGap2: [0.25, 1],
+  ...(NO_CROSS ? { crossings: [0, 0] } : {}),
 };
 const misses = (st) => Object.entries(STANDARD).filter(([k, [lo, hi]]) => !(st[k] >= lo - 1e-9 && st[k] <= hi + 1e-9)).map(([k]) => k);
 
@@ -130,6 +134,7 @@ const randomOpts = () => {
   const o = { seed: int(1, 100000) };
   for (const [k, f] of Object.entries(RANGES)) if (!FIXED.includes(k)) o[k] = f();
   o.layout = LAYOUT || null; // without --layout, search the free (non-hand-made) generator
+  if (NO_CROSS) Object.assign(o, { tramShareStops: false, metroShareStops: false });
   return o;
 };
 const perturb = (o) => {
@@ -140,6 +145,7 @@ const perturb = (o) => {
     p[k] = RANGES[k]();
   }
   if (rng() < 0.5) p.seed = int(1, 100000);
+  if (NO_CROSS) Object.assign(p, { tramShareStops: false, metroShareStops: false });
   return p;
 };
 

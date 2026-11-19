@@ -19,7 +19,7 @@ module.exports = {
     parkName: 'Harrow Common',
     labels: [{ text: 'Harbour Quarter', x: 0.42, y: 0.55 }, { text: 'West Docks', x: 0.16, y: 0.6 }, { text: 'Saltgate', x: 0.72, y: 0.88 }],
     // seed + settings tuned by: node tools/mapsearch.js --sy <dir> --layout harbour
-    tuned: { seed: 38316, streetBeta: 1, fillTarget: 0, cabTarget: 3.45, maxDeg2: 23, pruneLengthBias: 0.27, triWeight: 2.56, biconnected: true, tramMinStops: 62, tramHops: 4, tramMinHops: 1, tramStretch: 2, tramTarget: 3.76, tramDegCap: 5, tramShareStops: true, metroTarget: 3.03, startSpread: 160 },
+    tuned: { seed: 94588, streetBeta: 1.4, fillTarget: 3.94, cabTarget: 3.6, maxDeg2: 9, pruneLengthBias: 0.74, triWeight: 1.81, biconnected: true, tramMinStops: 63, tramHops: 6, tramMinHops: 1, tramStretch: 1.65, tramTarget: 3.38, tramDegCap: 5, tramShareStops: false, metroTarget: 3.21, startSpread: 165, bridges: 8, metroShareStops: false },
     river: { y: 0.76, waves: [[110, 380, 0.9], [28, 150, 2.4]] },
     parks: [
       { x: 0.33, y: 0.16, w: 600, h: 200, big: true },
@@ -42,7 +42,7 @@ module.exports = {
     parkName: 'Brackwell Common',
     labels: [{ text: 'Northbrack', x: 0.33, y: 0.3 }, { text: 'Ellery', x: 0.66, y: 0.68 }, { text: 'Fenhallow', x: 0.85, y: 0.2 }],
     // seed + settings tuned by: node tools/mapsearch.js --sy <dir> --layout twin
-    tuned: { seed: 49470, streetBeta: 1, fillTarget: 3.96, cabTarget: 3.57, maxDeg2: 31, pruneLengthBias: 0, triWeight: 3.84, biconnected: true, tramMinStops: 58, tramHops: 5, tramMinHops: 1, tramStretch: 1.97, tramTarget: 3.32, tramDegCap: 4, tramShareStops: true, metroTarget: 2.92, startSpread: 160, bridges: 9 },
+    tuned: { seed: 8311, streetBeta: 1.23, fillTarget: 3.39, cabTarget: 3.52, maxDeg2: 20, pruneLengthBias: 0.12, triWeight: 2.43, biconnected: true, tramMinStops: 57, tramHops: 7, tramMinHops: 1, tramStretch: 1.96, tramTarget: 3.61, tramDegCap: 5, tramShareStops: false, metroTarget: 2.89, startSpread: 177, bridges: 7, metroShareStops: false },
     // a long diagonal S-bend, like the Thames on the classic board: in low on the left,
     // out high on the right
     river: { y: 0.6, tilt: -0.3, windy: true, waves: [[150, 300, 0.4], [55, 130, 1.2], [22, 70, 0.5]] },
@@ -67,7 +67,7 @@ module.exports = {
     parkName: 'Abbey Fields',
     labels: [{ text: 'Old Quarter', x: 0.5, y: 0.45 }, { text: 'Millbrook', x: 0.2, y: 0.86 }, { text: 'Eastfold', x: 0.82, y: 0.86 }],
     // seed + settings tuned by: node tools/mapsearch.js --sy <dir> --layout quarter
-    tuned: { seed: 37653, streetBeta: 1.26, fillTarget: 0, cabTarget: 3.51, maxDeg2: 17, pruneLengthBias: 0.12, triWeight: 3.85, biconnected: true, tramMinStops: 63, tramHops: 5, tramMinHops: 1, tramStretch: 1.56, tramTarget: 3.22, tramDegCap: 6, tramShareStops: true, metroTarget: 3.47, startSpread: 160 },
+    tuned: { seed: 14304, streetBeta: 1.12, fillTarget: 3.55, cabTarget: 3.56, maxDeg2: 17, pruneLengthBias: 0.53, triWeight: 2.8, biconnected: true, tramMinStops: 55, tramHops: 7, tramMinHops: 1, tramStretch: 1.65, tramTarget: 3.68, tramDegCap: 4, tramShareStops: false, metroTarget: 3.08, startSpread: 166, bridges: 7, metroShareStops: false },
     river: { y: 0.24, waves: [[70, 440, 2.0], [30, 140, 0.4]] },
     parks: [
       { x: 0.36, y: 0.7, w: 620, h: 200, big: true },
@@ -90,7 +90,7 @@ module.exports = {
     parkName: 'Marsh Park',
     labels: [{ text: 'Westmarket', x: 0.18, y: 0.45 }, { text: 'Saltmarsh Cross', x: 0.5, y: 0.4 }, { text: 'Eastmarket', x: 0.82, y: 0.46 }],
     // seed + settings tuned by: node tools/mapsearch.js --sy <dir> --layout market
-    tuned: { seed: 79626, streetBeta: 1.03, fillTarget: 3.96, cabTarget: 3.56, maxDeg2: 17, pruneLengthBias: 0.32, triWeight: 1.52, biconnected: true, tramMinStops: 56, tramHops: 5, tramMinHops: 1, tramStretch: 1.49, tramTarget: 3.95, tramDegCap: 6, tramShareStops: true, metroTarget: 3.16, startSpread: 160 },
+    tuned: { seed: 3545, streetBeta: 1.04, fillTarget: 3.38, cabTarget: 3.62, maxDeg2: 21, pruneLengthBias: 0.31, triWeight: 2.43, biconnected: true, tramMinStops: 60, tramHops: 5, tramMinHops: 1, tramStretch: 1.65, tramTarget: 3.17, tramDegCap: 6, tramShareStops: false, metroTarget: 2.88, startSpread: 220, bridges: 8, metroShareStops: false },
     river: { y: 0.62, waves: [[95, 300, 1.1], [45, 120, 0.3]] },
     parks: [
       { x: 0.35, y: 0.08, w: 620, h: 210, big: true },
@@ -113,7 +113,7 @@ module.exports = {
     parkName: 'Highcombe Park',
     labels: [{ text: 'Highcombe Hill', x: 0.5, y: 0.18 }, { text: 'Lowfield', x: 0.3, y: 0.72 }, { text: 'Ashcombe', x: 0.72, y: 0.66 }],
     // seed + settings tuned by: node tools/mapsearch.js --sy <dir> --layout hill
-    tuned: { seed: 37653, streetBeta: 1, fillTarget: 0, cabTarget: 3.57, maxDeg2: 19, pruneLengthBias: 0.83, triWeight: 0.66, biconnected: true, tramMinStops: 60, tramHops: 5, tramMinHops: 1, tramStretch: 1.62, tramTarget: 3.91, tramDegCap: 5, tramShareStops: false, metroTarget: 3.18, startSpread: 170 },
+    tuned: { seed: 79759, streetBeta: 1, fillTarget: 0, cabTarget: 3.49, maxDeg2: 15, pruneLengthBias: 0.12, triWeight: 2.08, biconnected: true, tramMinStops: 56, tramHops: 6, tramMinHops: 1, tramStretch: 2.12, tramTarget: 3.38, tramDegCap: 4, tramShareStops: false, metroTarget: 3.47, startSpread: 210, bridges: 9, metroShareStops: false },
     river: { y: 0.8, waves: [[55, 460, 0.0], [20, 180, 1.7]] },
     parks: [
       { x: 0.4, y: 0.45, w: 560, h: 190, big: true },

@@ -80,6 +80,127 @@ def belief_update(gmap, mass, entries, pref):
     return mass
 
 
+MOVE_FEATS = ('dg', 'dg1', 'room', 'safe', 'bus', 'metro', 'secret', 'sec_after_rev',
+              'sec_on_rev', 'sec_hides', 'dgq', 'tk_rich', 'dg2', 'dg3', 'room0', 'room_lt5',
+              'logroom', 'deg', 'late', 'sec_late')
+
+
+def move_features(gmap, det_pos, det_tickets, fug_tickets, rnd):
+    """(4, N, F) features of the fugitive moving to station d with ticket t (0..3), facing
+    detectives at det_pos, holding fug_tickets, in round rnd (before the move). Every
+    feature depends on (t, d) only, not on where the fugitive came from, so a fitted
+    move model costs no more than belief_pref. Names in MOVE_FEATS."""
+    T = tables(gmap)
+    danger = gmap.dist[[E.ticket_mask(t) for t in det_tickets], det_pos].min(0).astype(float)
+    tk = fug_tickets
+    mask = 7 if tk[E.SECRET] > 0 else E.ticket_mask(tk)
+    if mask:
+        D = gmap.dist[mask]
+        room = ((D <= 3) & (D < danger[None, :])).sum(1).astype(float)
+    else:
+        room = np.zeros(gmap.n)
+    safe = (T.prop[3] & (danger[None, :] >= 2)).sum(1).astype(float)
+    deg = T.prop[3].sum(1).astype(float)
+    basic_any = T.prop[:3].any(0).any(0)           # d is reachable by some basic link
+    dg = np.minimum(danger, DANGER_CAP)
+    after_rev, on_rev, late = float(IS_REVEAL[rnd]), float(IS_REVEAL[rnd + 1]), rnd / E.MAX_ROUNDS
+    basic = np.array(tk[:3], dtype=float)
+    rich = np.zeros(4)
+    rich[:3] = basic == basic.max()
+    F = np.zeros((4, gmap.n, len(MOVE_FEATS)))
+    F[..., 0] = dg
+    F[..., 1] = danger <= 1
+    F[..., 2] = room / 10
+    F[..., 3] = safe / 5
+    F[1, :, 4] = 1
+    F[2, :, 5] = 1
+    F[3, :, 6] = 1
+    F[3, :, 7] = after_rev
+    F[3, :, 8] = on_rev
+    F[3, :, 9] = ~basic_any
+    F[..., 10] = dg ** 2 / 4
+    F[..., 11] = rich[:, None]
+    F[..., 12] = danger == 2
+    F[..., 13] = danger == 3
+    F[..., 14] = room == 0
+    F[..., 15] = room < 5
+    F[..., 16] = np.log1p(room)
+    F[..., 17] = deg / 5
+    F[..., 18] = late
+    F[3, :, 19] = late
+    return F
+
+
+def move_odds(gmap, det_pos, det_tickets, fug_tickets, rnd, w):
+    """(4, N) relative odds exp(w . features) of each (ticket, destination); zero for
+    tickets the fugitive does not hold and on detectives."""
+    g = np.exp(move_features(gmap, det_pos, det_tickets, fug_tickets, rnd) @ w)
+    for t in range(4):
+        if fug_tickets[t] <= 0:
+            g[t] = 0.0
+    g[:, det_pos] = 0.0
+    return g
+
+
+def belief_update_joint(gmap, mass, entries, odds_fn, evidence=False):
+    """Like belief_update, with a move model over (ticket, destination) pairs: a fugitive
+    at u moves with ticket t to d with probability odds[t, d] / sum over its legal moves,
+    so the ticket it used is evidence too (a secret ticket is unlikely from a station
+    with good taxi exits, say). odds_fn(j) gives the (4, N) odds before entry j.
+
+    evidence=True also returns the log probability the model gave to what was seen: the
+    fugitive not being where the detectives stand, each ticket used, each revealed
+    station. Comparing it across move models tells which one fits this fugitive."""
+    prop = tables(gmap).prop_f
+    logev = 0.0
+    for j, (t, p, rev, _) in enumerate(entries):
+        odds = odds_fn(j).astype(np.float32)
+        alive = mass * (odds.max(0) > 0)              # zero where a detective stands
+        z = alive.sum()
+        if z <= 0:
+            alive, z = mass, mass.sum()
+        logev += np.log(max(z, 1e-300))
+        Z = sum(prop[x] @ odds[x] for x in range(4))  # (N,) each source's total odds
+        src = np.divide(alive / z, Z, out=np.zeros(gmap.n), where=Z > 0)
+        new = (src @ prop[t]) * odds[t]               # P(ticket t, then station d)
+        if rev:
+            logev += np.log(max(new[p], 1e-300))
+            mass = np.zeros(gmap.n)
+            mass[p] = 1.0
+            continue
+        tot = new.sum()
+        logev += np.log(max(tot, 1e-300))
+        if tot <= 0:   # the model ruled out every route: fall back to plain propagation
+            new = ((mass > 0) @ prop[t]) * (odds[t] > 0)
+            tot = new.sum()
+        mass = new / tot if tot > 0 else new
+    return (mass, logev) if evidence else mass
+
+
+def team_territory(s, cands, tos, masks, h=3, mode='union', weights=None):
+    """(M,) the fugitive's territory if the current detective moves to tos[j] (with ticket
+    mask masks[j] left) and the others stay: stations within h moves of the fugitive that it
+    reaches strictly before every detective.
+      'union':    reachable from *some* candidate station first (a pessimistic bound; one
+                  distance table for all candidates, cheap)
+      'expected': mean over candidate stations (weights, default uniform) of the room to run
+                  the fugitive would have from there."""
+    m = s.map
+    i = s.current
+    od = np.full(m.n, E.INF, dtype=np.int64)
+    for j, p in enumerate(s.det_pos):
+        if j != i:
+            od = np.minimum(od, m.dist[E.ticket_mask(s.det_tickets[j]), p])
+    D = np.minimum(od[None, :], m.dist[masks, tos])            # (M,N) team distance after move
+    F = m.dist[7][cands]                                      # (nc,N) fugitive distance
+    if mode == 'union':
+        f = F.min(0)
+        return ((f[None, :] < D) & (f[None, :] <= h)).sum(1)
+    w = np.full(len(cands), 1.0 / len(cands)) if weights is None else weights
+    reach = (F[None, :, :] < D[:, None, :]) & (F[None, :, :] <= h)   # (M,nc,N)
+    return reach.sum(2) @ w
+
+
 def richest_ticket(tickets, options):
     """Most plentiful basic ticket among options (first wins ties); secret if none."""
     best = None
@@ -136,24 +257,30 @@ class HeuristicDetectives:
     Team terms (0 = off, the original heuristic): `team` × mean over candidates of the
     distance from the closest detective, counting this one at its new station, so a move
     only gains on candidates this detective would be closest to; `cover` × share of
-    candidates some detective could step onto next turn (subtracted: more is better)."""
+    candidates some detective could step onto next turn (subtracted: more is better).
 
-    def __init__(self, seed=None, noise=0.1, team=0.0, cover=0.0):
+    Territory term (`terr` per station, 0 = off): the fugitive's territory after the move,
+    counting the other detectives where they stand, see team_territory."""
+
+    def __init__(self, seed=None, noise=0.1, team=0.0, cover=0.0, terr=0.0, terr_h=3,
+                 terr_mode='union'):
         self.rng = random.Random(seed)
         self.noise = noise
         self.team = team
         self.cover = cover
+        self.terr, self.terr_h, self.terr_mode = terr, terr_h, terr_mode
 
     def choose_move(self, s):
         best, best_score = None, np.inf
-        for a, score in self.scores(s, team=self.team, cover=self.cover):
+        for a, score in self.scores(s, team=self.team, cover=self.cover, terr=self.terr,
+                                    terr_h=self.terr_h, terr_mode=self.terr_mode):
             score += self.rng.random() * self.noise
             if score < best_score:
                 best, best_score = a, score
         return best
 
     @staticmethod
-    def scores(s, mass=None, team=0.0, cover=0.0):
+    def scores(s, mass=None, team=0.0, cover=0.0, terr=0.0, terr_h=3, terr_mode='union'):
         """[((to, ticket), score)] for the detective to move, lower is better, no noise.
         mass: optional (N,) location estimate. The mean distance is then weighted by it, and
         stepping onto a likelier candidate scores better (-1000 - 100 * its share)."""
@@ -190,6 +317,8 @@ class HeuristicDetectives:
                 score = score + team * (np.minimum(td, 12) @ w) - cover * ((td <= 1) @ w)
         else:
             score = np.zeros(len(moves))
+        if terr and nc:
+            score = score + terr * team_territory(s, cands, tos, masks, terr_h, terr_mode, wc)
         on = pm[tos]
         if on.any():
             score = score.astype(float)

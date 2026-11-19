@@ -42,9 +42,12 @@ DEFAULT_WEIGHTS = {
 
 
 class AlphaBetaFugitive:
-    def __init__(self, depth=2, det_beam=2, root_keep=8, time_limit=None, weights=None,
+    def __init__(self, depth=3, det_beam=2, root_keep=8, time_limit=None, weights=None,
                  doubles=True, fast=True, seed=None):
-        """fast: run the tree search compiled (ai/fast.py) when numba is installed; same
+        """depth: rounds searched (default 3; with 4 detectives it cut detective wins from
+        28.3% to 21.7% against ISMCTS, while depth 4 did worse than 3: the paranoid search
+        grows too pessimistic).
+        fast: run the tree search compiled (ai/fast.py) when numba is installed; same
         tree, same values, much faster."""
         self.depth = depth
         self.det_beam = det_beam

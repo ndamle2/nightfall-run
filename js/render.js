@@ -10,6 +10,16 @@
     return e;
   }
 
+  // a police-badge shield about the size of a piece disc (r 23), centred on the station
+  const SHIELD_PTS = [[0, -27], [8, -21], [15, -20], [23, -20], [23, 0], [18, 17], [0, 27], [-18, 17], [-23, 0], [-23, -20], [-15, -20], [-8, -21], [0, -27]];
+  /** The shield outline scaled by k (1 = about a piece disc, r 23). */
+  const shield = (k) => {
+    const p = SHIELD_PTS.map(([x, y]) => `${(x * k).toFixed(1)} ${(y * k).toFixed(1)}`);
+    return `M${p[0]} C${p[1]} ${p[2]} ${p[3]} C${p[4]} ${p[5]} ${p[6]} C${p[7]} ${p[8]} ${p[9]} C${p[10]} ${p[11]} ${p[12]} Z`;
+  };
+  const SHIELD = shield(1.12);       // covers the station underneath, number and all
+  const SHIELD_HALO = shield(1.7);
+
   class BoardView {
     constructor(svg, map) {
       this.svg = svg;
@@ -18,11 +28,11 @@
       this.layers = {};
       for (const name of [
         'bg', 'blocks', 'parks', 'river', 'bridges', 'roads', 'lines', 'labels', 'ferry', 'preview',
-        'candidates', 'route', 'highlight', 'stations', 'pieces',
+        'candidates', 'route', 'highlight', 'stations', 'crossings', 'pieces',
       ]) {
         this.layers[name] = el('g', { class: `layer-${name}` }, svg);
       }
-      for (const name of ['pieces', 'route', 'candidates', 'highlight', 'preview', 'labels', 'blocks', 'bridges', 'roads']) {
+      for (const name of ['pieces', 'crossings', 'route', 'candidates', 'highlight', 'preview', 'labels', 'blocks', 'bridges', 'roads']) {
         this.layers[name].style.pointerEvents = 'none';
       }
       this.key = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
@@ -126,6 +136,10 @@
         }
       }
       const GAP = 7.5;
+      this.streetLanes = streets;
+      this.GAP = GAP;
+      this.crossings = this.findCrossings();
+      const XR = 40; // lanes stop this far from a crossing; drawCrossings joins them up
       const groups = { cab: el('g', {}, L.lines), tram: el('g', {}, L.lines), metro: el('g', {}, L.lines) };
       for (const st of streets.values()) {
         // Offsets are measured relative to the tram line's direction of travel, so a tram
@@ -138,7 +152,19 @@
           : !st.metro
             ? [['cab', -GAP / 2], ['tram', GAP / 2]]
             : [['metro', -GAP], ['cab', 0], ['tram', GAP]];
-        for (const [type, o] of lanes) el('path', { d: this.offsetPath(pts, o), class: `edge edge-${type}` }, groups[type]);
+        for (const [type, o] of lanes) {
+          let lp = this.offsetPts(pts, o);
+          if (type !== 'cab') {
+            for (const end of [f, t]) {
+              if (!this.crossings[type].has(end)) continue;
+              const c = this.st.get(end);
+              lp = lp.filter((p) => Math.hypot(p.x - c.x, p.y - c.y) >= XR);
+              const r = this.clipNear(this.offsetPts(pts, o), c, XR - 0.01, XR + 0.01, end === t);
+              if (r.length) lp = end === t ? [...lp, r[r.length - 1]] : [r[0], ...lp];
+            }
+          }
+          el('path', { d: 'M' + lp.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('L'), class: `edge edge-${type}` }, groups[type]);
+        }
       }
       for (const e of m.edges) {
         if (e.type === 'ferry') el('path', { d: 'M' + e.line.map(([x, y]) => `${x} ${y}`).join('L'), class: 'edge edge-ferry' }, L.ferry);
@@ -164,6 +190,134 @@
         txt.textContent = s.id;
         this.stationNodes.set(s.id, g);
       }
+      this.drawCrossings(groups);
+    }
+
+    /** Lane points of a tram/metro line along the street from a to b (same offsets as the
+     * street bundles drawn above). */
+    lanePts(type, a, b) {
+      const st = this.streetLanes.get(this.key(a, b));
+      const [f, t] = (st && st.dir) || [a, b];
+      const o = type === 'metro' ? -this.GAP : st && st.metro ? this.GAP : this.GAP / 2;
+      const pts = this.offsetPts(this.streetPts(f, t), o);
+      return f === a ? pts : pts.reverse();
+    }
+
+    /**
+     * Where two lines of the same kind both pass through a station without stopping, the
+     * street bundles alone meet in the middle and you cannot tell which way each line goes.
+     * Draw each line through such a station as one continuous curve on top of it, the later
+     * one bridging over the earlier (a road-coloured casing), with the station number on top.
+     */
+    /** {tram, metro}: Map station -> [[prev, next], ...] for stations that two or more lines
+     * of that kind pass through without stopping. */
+    findCrossings() {
+      const res = {};
+      for (const type of ['tram', 'metro']) {
+        const through = new Map();
+        const stops = new Set();
+        for (const e of this.map.edges) {
+          if (e.type !== type) continue;
+          stops.add(e.a); stops.add(e.b);
+          for (let i = 1; i + 1 < e.path.length; i++) {
+            const x = e.path[i];
+            if (!through.has(x)) through.set(x, []);
+            through.get(x).push([e.path[i - 1], e.path[i + 1]]);
+          }
+        }
+        res[type] = new Map([...through].filter(([x, ls]) => ls.length > 1 && !stops.has(x)));
+      }
+      return res;
+    }
+
+    drawCrossings(groups) {
+      const g = this.clear('crossings');
+      const R = 40; // matches XR in setMap: the lanes stop here
+      for (const type of ['tram', 'metro']) {
+        for (const [x, lines] of this.crossings[type]) {
+          const c = this.st.get(x);
+          const xg = el('g', { class: `crossing crossing-${type}` }, g);
+          lines.forEach(([u, v], li) => {
+            const inn = this.clipNear(this.lanePts(type, u, x), c, R - 0.5, 1.5 * R, true);
+            const out = this.clipNear(this.lanePts(type, x, v), c, R - 0.5, 1.5 * R, false);
+            const p = inn[inn.length - 1];
+            const q = out[0];
+            const di = this.unit(inn[inn.length - 2], p);
+            const dq = this.unit(q, out[1]);
+            const k = 0.9 * R;
+            const f = (pt) => `${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`;
+            let mid;
+            if (li === 0) {
+              // through the middle, under the station disc
+              mid = `C${f({ x: p.x + di.x * k, y: p.y + di.y * k })} ${f({ x: q.x - dq.x * k, y: q.y - dq.y * k })} ${f(q)}`;
+            } else {
+              // around the station disc, on the side away from the first line
+              const AR = 27;
+              const ang = (pt) => Math.atan2(pt.y - c.y, pt.x - c.x);
+              const a1 = ang(p), a2 = ang(q);
+              const first = lines[0];
+              const side = this.sideAway(c, a1, a2, [ang(this.st.get(first[0])), ang(this.st.get(first[1]))]);
+              const s1 = { x: c.x + AR * Math.cos(a1), y: c.y + AR * Math.sin(a1) };
+              const s2 = { x: c.x + AR * Math.cos(a2), y: c.y + AR * Math.sin(a2) };
+              const sweep = side > 0 ? 1 : 0;
+              let span = (a2 - a1) * (sweep ? 1 : -1);
+              span = ((span % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+              mid = `L${f(s1)}A${AR} ${AR} 0 ${span > Math.PI ? 1 : 0} ${sweep} ${f(s2)}L${f(q)}`;
+            }
+            const d = 'M' + inn.map(f).join('L') + mid + 'L' + out.slice(1).map(f).join('L');
+            if (li === 0) {
+              // the first line runs under the station, like the other lines do
+              el('path', { d, class: `edge edge-${type}` }, groups[type]);
+            } else {
+              // the others bridge over it: a road-coloured casing, then the line
+              el('path', { d, class: 'crossing-casing' }, xg);
+              el('path', { d, class: `edge edge-${type} crossing-line` }, xg);
+            }
+          });
+          const t = el('text', { x: c.x, y: c.y, class: 'crossing-num' }, xg);
+          t.textContent = x;
+        }
+      }
+    }
+
+    /** The part of a polyline between distances r0 and r1 from point c; `ending` means the
+     * line runs towards c (keep its far part first). */
+    clipNear(pts, c, r0, r1, ending) {
+      const seq = ending ? pts.slice().reverse() : pts;   // now starting at c, running away
+      const dist = (p) => Math.hypot(p.x - c.x, p.y - c.y);
+      const out = [];
+      for (let i = 0; i + 1 < seq.length; i++) {
+        const a = seq[i], b = seq[i + 1];
+        const da = dist(a), db = dist(b);
+        for (const r of [r0, r1]) {
+          if ((da - r) * (db - r) < 0) {
+            const f = (r - da) / (db - da);
+            out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, r });
+          }
+        }
+        if (db > r0 && db < r1) out.push({ ...b, r: db });
+        if (db >= r1) break;
+      }
+      const res = out.sort((p, q) => p.r - q.r);
+      if (res.length < 2) res.push({ x: seq[seq.length - 1].x, y: seq[seq.length - 1].y });
+      return ending ? res.reverse() : res;
+    }
+
+    /** Which way to go round a station from angle a1 to a2 (+1 clockwise in screen
+     * coordinates, -1 the other way) so the arc keeps clear of the arms at angles `avoid`. */
+    sideAway(c, a1, a2, avoid) {
+      const norm = (x) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      const cw = norm(a2 - a1);            // arc length going with increasing angle
+      const inArc = (x, dir) => (dir > 0 ? norm(x - a1) < cw : norm(a1 - x) < 2 * Math.PI - cw);
+      const hits = (dir) => avoid.filter((x) => inArc(x, dir)).length;
+      const h1 = hits(1), h2 = hits(-1);
+      if (h1 !== h2) return h1 < h2 ? 1 : -1;
+      return cw <= Math.PI ? 1 : -1;      // otherwise the shorter way round
+    }
+
+    unit(a, b) {
+      const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      return { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
     }
 
     /** Points along the street from station a to station b (straight if there is none). */
@@ -188,17 +342,21 @@
       return [this.st.get(a), this.st.get(b)];
     }
 
-    /** SVG path for a polyline shifted sideways by o (positive = left of travel). */
-    offsetPath(pts, o) {
+    /** A polyline shifted sideways by o (positive = left of travel). */
+    offsetPts(pts, o) {
       const n = pts.length;
-      const out = pts.map((p, i) => {
-        if (!o) return p;
+      return pts.map((p, i) => {
+        if (!o) return { x: p.x, y: p.y };
         const a = pts[Math.max(0, i - 1)];
         const b = pts[Math.min(n - 1, i + 1)];
         const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
         return { x: p.x - ((b.y - a.y) / len) * o, y: p.y + ((b.x - a.x) / len) * o };
       });
-      return 'M' + out.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('L');
+    }
+
+    /** SVG path for a polyline shifted sideways by o (positive = left of travel). */
+    offsetPath(pts, o) {
+      return 'M' + this.offsetPts(pts, o).map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join('L');
     }
 
     /** Points along an edge, for drawing a route preview. */
@@ -276,8 +434,20 @@
       for (const p of pieces) {
         const s = this.st.get(p.pos);
         const pg = el('g', { transform: `translate(${s.x} ${s.y})`, class: `piece ${p.kind}${p.active ? ' active' : ''}` }, g);
-        if (p.active) el('circle', { r: 31, class: 'piece-active', style: `stroke:${p.color}` }, pg);
-        el('circle', { r: 23, class: 'piece-disc', style: `fill:${p.color}` }, pg);
+        // detectives are badge-shaped so they never read as a station (stations are round);
+        // the fugitive stays a disc
+        if (p.kind === 'detective') {
+          // a pulsing shield-shaped halo marks every detective; the number matches the panel
+          el('path', { d: SHIELD_HALO, class: 'det-halo', style: `stroke:${p.color};fill:${p.color}` }, pg);
+          if (p.active) el('circle', { r: 40, class: 'piece-active', style: `stroke:${p.color}` }, pg);
+          el('path', { d: SHIELD, class: 'piece-disc', style: `fill:${p.color}` }, pg);
+          const n = el('text', { class: 'det-num', y: -1 }, pg);
+          n.textContent = p.badge;
+          continue;
+        } else {
+          if (p.active) el('circle', { r: 31, class: 'piece-active', style: `stroke:${p.color}` }, pg);
+          el('circle', { r: 23, class: 'piece-disc', style: `fill:${p.color}` }, pg);
+        }
         const t = el('text', { class: 'piece-num' }, pg);
         t.textContent = p.pos;
         const bg = el('g', { transform: 'translate(20 -20)' }, pg);

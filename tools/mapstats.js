@@ -210,6 +210,19 @@ function computeStats(map) {
   st.startGap = mean(gaps);
   st.startGap2 = gaps.filter((g) => g <= 2).length / gaps.length;
   st.startCover2 = mean(cover);
+
+  // Stations two lines of the same kind both pass through without stopping (the map can't
+  // show which way each goes; js/render.js draws one of them around the station).
+  st.crossings = 0;
+  for (const t of ['tram', 'metro']) {
+    const stops = new Set(map.edges.filter((e) => e.type === t).flatMap((e) => [e.a, e.b]));
+    const through = new Map();
+    for (const e of map.edges) {
+      if (e.type !== t || !e.path) continue;
+      for (const x of e.path.slice(1, -1)) through.set(x, (through.get(x) || 0) + 1);
+    }
+    for (const [x, n] of through) if (n > 1 && !stops.has(x)) st.crossings++;
+  }
   return st;
 }
 

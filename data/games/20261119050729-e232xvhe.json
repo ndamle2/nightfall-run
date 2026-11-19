@@ -1,0 +1,502 @@
+{
+ "schema": 1,
+ "app": "nightfall-run",
+ "id": "20261119050729-e232xvhe",
+ "mode": "human-fugitive",
+ "map": "quarter",
+ "mapSeed": 14304,
+ "detectives": 5,
+ "fugitiveStart": 120,
+ "detectiveStarts": [
+  133,
+  64,
+  172,
+  174,
+  69
+ ],
+ "history": [
+  {
+   "side": "F",
+   "to": 136,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 13344
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 118,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 580
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 63,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 551
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 178,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 484
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 158,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 587
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 70,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 588
+  },
+  {
+   "side": "F",
+   "to": 137,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 2293
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 168,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 583
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 47,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 401
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 179,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 541
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 160,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 410
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 89,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 462
+  },
+  {
+   "side": "F",
+   "to": 122,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 39432
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 151,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 554
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 37,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 399
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 118,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 419
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 178,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 517
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 121,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 407
+  },
+  {
+   "side": "F",
+   "to": 123,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 6773
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 137,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 467
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 109,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 416
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 168,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 348
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 179,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 385
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 105,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 376
+  },
+  {
+   "side": "F",
+   "type": "double",
+   "by": "human",
+   "ms": 12682
+  },
+  {
+   "side": "F",
+   "to": 122,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 39034
+  },
+  {
+   "side": "F",
+   "to": 136,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 3278
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 124,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 312
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 126,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 352
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 109,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 328
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 118,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 361
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 121,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 337
+  },
+  {
+   "side": "F",
+   "type": "double",
+   "by": "human",
+   "ms": 17297
+  },
+  {
+   "side": "F",
+   "to": 137,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 6297
+  },
+  {
+   "side": "F",
+   "to": 151,
+   "ticket": "secret",
+   "by": "human",
+   "ms": 3038
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 137,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 480
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 125,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 325
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 168,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 317
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 135,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 378
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 118,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 462
+  },
+  {
+   "side": "F",
+   "to": 197,
+   "ticket": "secret",
+   "by": "human",
+   "ms": 26782
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 138,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 208
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 124,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 183
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 152,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 171
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 181,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 166
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 168,
+   "ticket": "metro",
+   "by": "server",
+   "ms": 168
+  },
+  {
+   "side": "F",
+   "to": 184,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 11628
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 151,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 134
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 137,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 69
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 167,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 86
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 182,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 77
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 197,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 61
+  },
+  {
+   "side": "F",
+   "to": 186,
+   "ticket": "cab",
+   "by": "human",
+   "ms": 4281
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 168,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 218
+  },
+  {
+   "side": "D",
+   "i": 1,
+   "to": 151,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 215
+  },
+  {
+   "side": "D",
+   "i": 2,
+   "to": 185,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 137
+  },
+  {
+   "side": "D",
+   "i": 3,
+   "to": 195,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 150
+  },
+  {
+   "side": "D",
+   "i": 4,
+   "to": 183,
+   "ticket": "tram",
+   "by": "server",
+   "ms": 113
+  },
+  {
+   "side": "F",
+   "to": 187,
+   "ticket": "secret",
+   "by": "human",
+   "ms": 14675
+  },
+  {
+   "side": "D",
+   "i": 0,
+   "to": 187,
+   "ticket": "cab",
+   "by": "server",
+   "ms": 153
+  }
+ ],
+ "bots": {
+  "engine": "server",
+  "fugitive": {
+   "name": "alphabeta",
+   "opts": {}
+  },
+  "detectives": {
+   "name": "ismcts",
+   "opts": {}
+  }
+ },
+ "result": {
+  "winner": "detectives",
+  "reason": "Detective Blue caught the fugitive at station 187!",
+  "round": 12
+ },
+ "created": "2026-11-19T05:07:29.671Z",
+ "updated": "2026-11-19T05:16:06.451Z",
+ "savedAt": "2026-11-18T21:16:06-0800"
+}

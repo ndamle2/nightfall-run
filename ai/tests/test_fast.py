@@ -108,6 +108,10 @@ class FastTree(unittest.TestCase):
             for s in positions(gm, random.Random(9), 400):
                 if s.phase == E.DETECTIVE_PHASE:
                     self.assertEqual(det_scores(s), P.HeuristicDetectives.scores(s))
+                    got = det_scores(s, 0.3, 3)
+                    ref = P.HeuristicDetectives.scores(s, terr=0.3, terr_h=3)
+                    self.assertEqual([m for m, _ in got], [m for m, _ in ref])
+                    np.testing.assert_allclose([v for _, v in got], [v for _, v in ref], atol=1e-9)
                 else:
                     self.assertEqual(ranked_turns(s), py_ranked(s))
 

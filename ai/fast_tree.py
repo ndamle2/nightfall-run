@@ -11,7 +11,39 @@ from .fast import njit, _mask, _occupied, INF
 
 
 @njit(cache=True)
-def _det_scores(T_prop, T_dist, nbr_basic, dp, dt, i, cand, tos, tks, scores, cands):
+def _union_territory_setup(T_dist, dp, dt, i, cands, nc, od, F):
+    """od: other detectives' distance to each station; F: fugitive distance from the
+    nearest candidate (both (N,))."""
+    n = od.shape[0]
+    for v in range(n):
+        od[v] = INF
+        F[v] = INF
+    for j in range(dp.shape[0]):
+        if j != i:
+            row = T_dist[_mask(dt[j]), dp[j]]
+            for v in range(n):
+                if row[v] < od[v]:
+                    od[v] = row[v]
+    for c in range(nc):
+        row = T_dist[7, cands[c]]
+        for v in range(n):
+            if row[v] < F[v]:
+                F[v] = row[v]
+
+
+@njit(cache=True)
+def _union_territory(T_dist, od, F, mask, v, h):
+    row = T_dist[mask, v]
+    cnt = 0
+    for u in range(od.shape[0]):
+        d = row[u] if row[u] < od[u] else od[u]
+        if F[u] < d and F[u] <= h:
+            cnt += 1
+    return cnt
+
+
+@njit(cache=True)
+def _det_scores(T_prop, T_dist, nbr_basic, dp, dt, i, cand, tos, tks, scores, cands, terr, h):
     p = dp[i]
     k = dp.shape[0]
     nc = 0
@@ -19,6 +51,11 @@ def _det_scores(T_prop, T_dist, nbr_basic, dp, dt, i, cand, tos, tks, scores, ca
         if cand[v] and not _occupied(dp, v):
             cands[nc] = v
             nc += 1
+    n = cand.shape[0]
+    od = np.empty(n, dtype=np.int64)
+    F = np.empty(n, dtype=np.int64)
+    if terr != 0 and nc:
+        _union_territory_setup(T_dist, dp, dt, i, cands, nc, od, F)
     left = np.empty(3, dtype=np.int64)
     m = 0
     for a in range(nbr_basic.shape[1]):
@@ -48,6 +85,8 @@ def _det_scores(T_prop, T_dist, nbr_basic, dp, dt, i, cand, tos, tks, scores, ca
                     mn = d
                 sm += d if d < 12 else 12
             sc = 3 * mn + sm / nc
+            if terr != 0:
+                sc = sc + terr * _union_territory(T_dist, od, F, _mask(left), v, h)
         else:
             sc = 0.0
         if cand[v]:   # v is not occupied by another detective, nor by i (not a neighbour)
@@ -63,8 +102,9 @@ def _det_scores(T_prop, T_dist, nbr_basic, dp, dt, i, cand, tos, tks, scores, ca
     return m
 
 
-def det_scores(s):
-    """[((to, ticket), score)] as HeuristicDetectives.scores(s)."""
+def det_scores(s, terr=0.0, terr_h=3):
+    """[((to, ticket), score)] as HeuristicDetectives.scores(s, terr=terr, terr_h=terr_h)
+    (union territory mode)."""
     T = F.tables(s.map)
     w = T.nbr_basic.shape[1]
     tos = np.empty(w, dtype=np.int64)
@@ -73,7 +113,8 @@ def det_scores(s):
     cands = np.empty(s.map.n, dtype=np.int64)
     dp = np.array(s.det_pos, dtype=np.int64)
     dt = np.array(s.det_tickets, dtype=np.int64)
-    m = _det_scores(T.prop, T.dist, T.nbr_basic, dp, dt, s.current, s.cand, tos, tks, scores, cands)
+    m = _det_scores(T.prop, T.dist, T.nbr_basic, dp, dt, s.current, s.cand, tos, tks, scores, cands,
+                    float(terr), int(terr_h))
     return [((int(tos[j]), int(tks[j])), float(scores[j])) for j in range(m)]
 
 

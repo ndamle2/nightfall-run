@@ -49,6 +49,7 @@ class GameMap:
     def __init__(self, data):
         self.key = data.get('key', '')
         self.name = data.get('name', self.key)
+        self.seed = data.get('seed')
         self.ids = sorted(s['id'] for s in data['stations'])
         self.index = {sid: i for i, sid in enumerate(self.ids)}
         n = self.n = len(self.ids)

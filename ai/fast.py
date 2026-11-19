@@ -237,6 +237,38 @@ def _move_detective(prop, nbr_any, nbr_basic, dp, dt, ftk, fpos, st, to, t):
 # ---------------- heuristic players ----------------
 
 @njit(cache=True)
+def _terr_setup(T_dist, dp, dt, i, cands, nc, od, F):
+    """Union territory (policies.team_territory): od = other detectives' distance to each
+    station, F = fugitive distance from the nearest candidate."""
+    n = od.shape[0]
+    for v in range(n):
+        od[v] = INF
+        F[v] = INF
+    for j in range(dp.shape[0]):
+        if j != i:
+            row = T_dist[_mask(dt[j]), dp[j]]
+            for v in range(n):
+                if row[v] < od[v]:
+                    od[v] = row[v]
+    for c in range(nc):
+        row = T_dist[7, cands[c]]
+        for v in range(n):
+            if row[v] < F[v]:
+                F[v] = row[v]
+
+
+@njit(cache=True)
+def _terr_count(T_dist, od, F, mask, v, h):
+    row = T_dist[mask, v]
+    cnt = 0
+    for u in range(od.shape[0]):
+        d = row[u] if row[u] < od[u] else od[u]
+        if F[u] < d and F[u] <= h:
+            cnt += 1
+    return cnt
+
+
+@njit(cache=True)
 def _fug_best(prop, nbr_any, edge, dp, fpos, ftk, base, noise):
     best, best_sc = -1, -np.inf
     for a in range(nbr_any.shape[1]):
@@ -296,7 +328,8 @@ def _fugitive_turn(T_prop, T_dist, T_edge, nbr_any, nbr_basic, dp, dt, ftk, cand
 
 
 @njit(cache=True)
-def _detective_move(T_prop, T_dist, nbr_any, nbr_basic, dp, dt, ftk, cand, cands, pos, st, noise):
+def _detective_move(T_prop, T_dist, nbr_any, nbr_basic, dp, dt, ftk, cand, cands, pos, st, noise,
+                    terr, h, od, F):
     i = st[2]
     p = dp[i]
     k = dp.shape[0]
@@ -305,6 +338,8 @@ def _detective_move(T_prop, T_dist, nbr_any, nbr_basic, dp, dt, ftk, cand, cands
         if cand[v] and not _occupied(dp, v):
             cands[nc] = v
             nc += 1
+    if terr != 0 and nc:
+        _terr_setup(T_dist, dp, dt, i, cands, nc, od, F)
     best_v, best_t, best_sc = -1, -1, np.inf
     left = np.empty(3, dtype=np.int64)
     for a in range(nbr_basic.shape[1]):
@@ -333,6 +368,8 @@ def _detective_move(T_prop, T_dist, nbr_any, nbr_basic, dp, dt, ftk, cand, cands
                     mn = d
                 sm += d if d < 12 else 12
             sc = 3 * mn + sm / nc
+            if terr != 0:
+                sc = sc + terr * _terr_count(T_dist, od, F, _mask(left), v, h)
         else:
             sc = 0.0
         near = 0
@@ -433,8 +470,10 @@ def _value(T_prop, T_dist, nbr_any, dp, dt, ftk, cand, dg, fpos, st, W):
 
 @njit(cache=True)
 def _playouts(T_prop, T_dist, T_edge, nbr_any, nbr_basic, det_pos, det_tk, fug_pos, fug_tk,
-              state, cand, until, W, fnoise, dnoise, out):
+              state, cand, until, W, fnoise, dnoise, terr, h, out):
     B, n = cand.shape
+    od = np.empty(n, dtype=np.int64)
+    F = np.empty(n, dtype=np.int64)
     tmp = np.empty(n, dtype=np.bool_)
     dg = np.empty(n, dtype=np.uint8)
     base = np.empty(n)
@@ -451,7 +490,7 @@ def _playouts(T_prop, T_dist, T_edge, nbr_any, nbr_basic, det_pos, det_tk, fug_p
                                dg, base, pos, st, fnoise)
             else:
                 _detective_move(T_prop, T_dist, nbr_any, nbr_basic, dp, dt, ftk, cd, cands, pos, st,
-                                dnoise)
+                                dnoise, terr, h, od, F)
         fug_pos[b] = pos[0]
         if st[0] == OVER:
             out[b] = 1.0 if st[4] == DET_WIN else 0.0
@@ -479,15 +518,17 @@ def full_weights(value_model):
     return W
 
 
-def playout_values(states, rounds, W, fnoise=0.5, dnoise=0.1, packed=None):
+def playout_values(states, rounds, W, fnoise=0.5, dnoise=0.1, packed=None, terr=0.0, terr_h=3):
     """P(detectives win) for each live state, after `rounds` rounds of heuristic play
-    (None: to the end), scored by the value model with weights W (full_weights)."""
+    (None: to the end), scored by the value model with weights W (full_weights). terr: the
+    playout detectives' territory weight (HeuristicDetectives terr, union mode)."""
     T = tables(states[0].map)
     det_pos, det_tk, fug_pos, fug_tk, state, cand = packed or pack(states)
     until = (state[:, 1] + rounds) if rounds is not None else np.full(len(states), 10 ** 6)
     out = np.empty(len(states))
     _playouts(T.prop, T.dist, T.edge, T.nbr_any, T.nbr_basic, det_pos, det_tk, fug_pos, fug_tk,
-              state, cand, until.astype(np.int64), W, float(fnoise), float(dnoise), out)
+              state, cand, until.astype(np.int64), W, float(fnoise), float(dnoise), float(terr),
+              int(terr_h), out)
     return out
 
 

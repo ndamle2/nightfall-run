@@ -42,6 +42,7 @@ const DEFAULTS = {
   tramDegCap: 5,
   tramShareStops: true, // allow two tram lines to pass through the same cab-only station
   metroTarget: 3.3,
+  metroShareStops: true, // allow two metro lines to pass through the same station (false: no crossings to draw)
   layout: 'twin', // key in tools/layouts.js (hand-made river, parks, districts), or null / 'none'
   bridges: 6, // most streets allowed to cross the river (one per equal-width strip of the map)
   startSpread: 228, // starting minimum spacing (px) between start stations; lower packs them closer
@@ -661,7 +662,7 @@ for (let attempt = 0; attempt < 60 && !metro; attempt++) {
   const d = 540 - (attempt % 10) * 15;
   metroHubs = spreadSubset(tramStops, d, (i) => tramAdj.get(i).length);
   if (metroHubs.length < 12 || metroHubs.length > 16) continue;
-  const m = selectRoutes(metroHubs, routeCandidates(metroHubs, tramAdj, 7, 1.8), { degCap: 4, targetAvg: O.metroTarget, relaxInner: true });
+  const m = selectRoutes(metroHubs, routeCandidates(metroHubs, tramAdj, 7, 1.8), { degCap: 4, targetAvg: O.metroTarget, relaxInner: O.metroShareStops !== false });
   if (m && m.length >= metroHubs.length + 3) metro = m;
 }
 if (!metro) fail('could not build a connected metro network');
