@@ -261,7 +261,9 @@ button { font: inherit; }
 .modal h3 { font-size: 14px; margin: 18px 0 6px; }
 .modal ul { padding-left: 20px; line-height: 1.55; color: #4b4741; margin: 0; }
 
-.form-grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; margin-top: 14px; }
+/* a fixed label column so the setup form's two grids (settings, detective names) line up */
+.form-grid { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px 12px; align-items: center; margin-top: 14px; }
+.form-grid .balance-pop { grid-column: 1 / -1; }
 .form-grid input[type=text], .form-grid select {
   font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; width: 100%;
 }

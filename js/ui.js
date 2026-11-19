@@ -503,7 +503,7 @@
         </select>
         <span></span><span class="fineprint"><span id="city-blurb">${esc(MAP.blurb || '')}</span>
           <a href="#" id="balance-link" class="balance-link">How hard is each city?</a></span>
-        <span></span><div id="balance-pop" class="balance-pop hidden"></div>
+        <div id="balance-pop" class="balance-pop hidden"></div>
         <label for="play-mode">Players</label>
         <select id="play-mode">
           ${Object.entries(PLAY_MODES).map(([k, label]) => `<option value="${k}" ${k === (prefs.playMode || 'hotseat') ? 'selected' : ''}>${esc(label)}</option>`).join('')}

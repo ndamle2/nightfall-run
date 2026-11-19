@@ -1,3 +1,4 @@
+/** @OnlyCurrentDoc */
 /*
  * Nightfall Run — receives finished games from the site and appends them to this sheet.
  * Set up: tools/sheets/README.md. Paste this into the sheet's Extensions > Apps Script.
