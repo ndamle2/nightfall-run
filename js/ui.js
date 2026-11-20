@@ -102,15 +102,17 @@
   };
   const CITY_NOTE = { harbour: 'hardest for the detectives' };
 
+  // bright enough to read on the night map
   const DET_PRESETS = [
-    { name: 'Blue', color: '#2f6fd0' },
-    { name: 'Orange', color: '#e07a1f' },
-    { name: 'Violet', color: '#8657c6' },
-    { name: 'Brown', color: '#8a5a2e' }, // no line, ticket or station uses brown
-    { name: 'Rose', color: '#cf4a8c' },
+    { name: 'Blue', color: '#3d86f2' },
+    { name: 'Orange', color: '#f08a2c' },
+    { name: 'Violet', color: '#9a72ee' },
+    { name: 'Brown', color: '#b47c48' }, // no line, ticket or station uses brown
+    { name: 'Rose', color: '#e2629f' },
   ];
-  const FUG_COLOR = '#2e2c2a';
-  const FUG_HL = '#d99a12';
+  const FUG_COLOR = '#10131b'; // the fugitive is a shadow, ringed in pale light
+  const FUG_RING = '#efe9dd';
+  const FUG_HL = '#e9b13f';
   const TICKETS = {
     cab: { label: 'Cab', color: 'var(--cab)' },
     tram: { label: 'Tram', color: 'var(--tram)' },
@@ -119,7 +121,7 @@
     double: { label: 'Double', color: 'var(--double)' },
   };
 
-  const LINE_COLORS = { cab: '#e8ad35', tram: '#2f9c6b', metro: '#cf4a40', ferry: '#3f7dc8' };
+  const LINE_COLORS = { cab: '#e9b13f', tram: '#2fbf80', metro: '#ec5a4e', ferry: '#4d97ec' };
   const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
   let EDGES_BY_PAIR = new Map();
   /** For hover previews: which concrete lines could carry each legal move. */
@@ -172,9 +174,9 @@
   // ---------- persistence ----------
   function loadPrefs() {
     try {
-      return { showPossible: false, ...(JSON.parse(localStorage.getItem(PREF_KEY)) || {}) };
+      return { showPossible: false, lighting: true, ...(JSON.parse(localStorage.getItem(PREF_KEY)) || {}) };
     } catch (e) {
-      return { showPossible: false };
+      return { showPossible: false, lighting: true };
     }
   }
   function savePrefs() {
@@ -447,9 +449,10 @@
           break;
         }
       }
-      const wait = BOT_STEP_MS - (Date.now() - t0);
       if (side === 'detectives') {
         render();
+        // each move stays on screen a moment, and at least until the piece has arrived
+        const wait = Math.max(BOT_STEP_MS - (Date.now() - t0), board.busyMs() + 150);
         if (wait > 0) await sleep(wait);
       }
     }
@@ -485,6 +488,7 @@
   // ---------- setup ----------
   function showSetup() {
     botRun++;
+    if (!game) { board.clearFx(); clearDispatch(); }
     mode = 'setup';
     closePicker();
     // every new game starts in a random city (the list still lets you pick)
@@ -613,9 +617,12 @@
     }
   }
   let lastModeBeforeSetup = null;
+  let endingShown = null; // the game whose ending has played on the board
 
   function startGame(cfg, pm = 'hotseat') {
     botRun++;
+    board.clearFx();
+    clearDispatch();
     reviewOpen = false;
     gameMapKey = MAP_KEY;
     game = E.createGame(MAP, ADJ, cfg);
@@ -630,6 +637,8 @@
 
   function resume(saved) {
     botRun++;
+    board.clearFx();
+    clearDispatch();
     reviewOpen = false;
     useMap(saved.mapKey);
     gameMapKey = MAP_KEY;
@@ -662,10 +671,44 @@
     const moves = game.log.slice(lastEntry.double ? -2 : -1);
     const desc = moves.map((e) => TICKETS[e.ticket].label).join(' then ');
     const reveal = moves.filter((e) => e.reveal).pop();
-    if (reveal) {
-      toast(`The fugitive moved (${desc}) and was spotted at station ${reveal.pos}!`, 6000);
-      board.centerOn(reveal.pos);
-    } else toast(`The fugitive moved: ${desc}${moves.length > 1 ? ' (double move)' : ''}.`, 4500);
+    if (reveal) announceReveal(reveal, `The fugitive travelled by ${desc}${moves.length > 1 ? ' (double move)' : ''}.`);
+    else toast(`The fugitive moved: ${desc}${moves.length > 1 ? ' (double move)' : ''}.`, 4500);
+  }
+
+  /** The nearest district name to a station, or the city's name. */
+  function placeName(pos) {
+    const m = MAPS[gameMapKey] || MAP;
+    const s = m.stations.find((x) => x.id === pos);
+    let best = null, bd = 650;
+    for (const lb of (m.decor && m.decor.labels) || []) {
+      const d = Math.hypot(lb.x - s.x, lb.y - s.y);
+      if (d < bd) { bd = d; best = lb.text; }
+    }
+    return best || m.name;
+  }
+
+  /** A reveal: a radio dispatch on the board and a searchlight on the station. */
+  function announceReveal(entry, sub, you = false) {
+    dispatch(`Dispatch · move ${entry.round}`, `${you ? 'You were sighted' : 'Fugitive sighted'} at ${entry.pos}, ${placeName(entry.pos)}`, sub);
+    setTimeout(() => { if (game) board.revealAt(entry.pos); }, board.busyMs());
+  }
+
+  let dispatchTimer = null;
+  function dispatch(head, main, sub, ms = 6000) {
+    const d = $('#dispatch');
+    d.innerHTML = `<div class="d-head">${esc(head)}</div><div class="d-main">${esc(main)}</div>${sub ? `<div class="d-sub">${esc(sub)}</div>` : ''}`;
+    d.classList.remove('hidden', 'out');
+    void d.offsetWidth; // restart the entrance animation
+    d.classList.add('in');
+    clearTimeout(dispatchTimer);
+    dispatchTimer = setTimeout(() => {
+      d.classList.add('out');
+      dispatchTimer = setTimeout(() => d.classList.add('hidden'), 700);
+    }, ms);
+  }
+  function clearDispatch() {
+    clearTimeout(dispatchTimer);
+    $('#dispatch').classList.add('hidden');
   }
 
   // ---------- mode transitions ----------
@@ -725,10 +768,7 @@
       $('#btn-go').addEventListener('click', () => {
         closeModal();
         enterMode('detectives');
-        if (reveal) {
-          toast(`The fugitive was spotted at station ${reveal.pos}!`, 5000);
-          board.centerOn(reveal.pos);
-        }
+        if (reveal) announceReveal(reveal, `The fugitive travelled by ${moves.map((e) => TICKETS[e.ticket].label).join(' then ')}.`);
       });
       return;
     }
@@ -744,7 +784,16 @@
       saveRecord();
       requestReview();
       render();
-      showGameOver();
+      const g = game;
+      if (endingShown === g) return showGameOver();
+      endingShown = g;
+      // let the last move arrive, play the ending on the board, then show the result
+      setTimeout(() => {
+        if (game !== g) return;
+        if (g.winner === 'fugitive') board.sunrise();
+        else board.capture(g.fugitive.pos, g.detectives.map((d) => d.color));
+        setTimeout(() => { if (game === g && mode === 'over') showGameOver(); }, board.fxOn ? 2000 : 0);
+      }, board.busyMs() + 120);
       return;
     }
   }
@@ -831,6 +880,8 @@
       board.setHighlights([], '#000');
       board.setCandidates([]);
       board.setRoute(null, null);
+      board.setSky(0);
+      $('#cand-count').textContent = '';
       $('#turn').innerHTML = '<div class="hint">Set up a game to begin.</div>';
       $('#players').innerHTML = '';
       $('#log').innerHTML = '';
@@ -841,16 +892,22 @@
     // the human fugitive always sees itself; a computer fugitive is shown only at the end
     const showFugitive = mode === 'fugitive' || mode === 'over' || (humanIs('fugitive') && mode !== 'setup');
     const pieces = game.detectives.map((d, i) => ({
+      key: `d${i}`,
       pos: d.pos,
       color: d.color,
       badge: String(i + 1),
       kind: 'detective',
       active: (mode === 'detectives' || mode === 'bot-detectives') && game.phase === 'detectives' && game.current === i,
+      via: lastMove('D', i, d.start, d.pos),
     }));
     if (showFugitive) {
-      pieces.push({ pos: game.fugitive.pos, color: FUG_COLOR, badge: 'F', kind: 'fugitive', active: mode === 'fugitive' });
+      pieces.push({
+        key: 'f', pos: game.fugitive.pos, color: FUG_COLOR, badge: 'F', kind: 'fugitive', active: mode === 'fugitive',
+        via: lastMove('F', null, game.fugitive.start, game.fugitive.pos),
+      });
     }
     board.setPieces(pieces);
+    board.setSky(Math.min(1, game.round / E.MAX_ROUNDS));
 
     let moves = [];
     let from = null;
@@ -867,11 +924,11 @@
     board.setHighlights(moves.map((m) => m.to), hlColor);
     board.setLegalRoutes(from ? legalRoutes(from, moves) : null);
 
-    board.setCandidates(
-      prefs.showPossible && ['detectives', 'handoff-fugitive', 'bot-fugitive', 'bot-detectives'].includes(mode) && game.phase !== 'over'
-        ? E.possibleLocations(game, ADJ, MAP)
-        : []
-    );
+    const cands = prefs.showPossible && ['detectives', 'handoff-fugitive', 'bot-fugitive', 'bot-detectives'].includes(mode) && game.phase !== 'over'
+      ? E.possibleLocations(game, ADJ, MAP)
+      : [];
+    board.setCandidates(cands);
+    $('#cand-count').textContent = cands.length ? `${cands.length} station${cands.length === 1 ? '' : 's'}` : '';
 
     const last = E.lastReveal(game);
     if (mode === 'over') {
@@ -888,6 +945,34 @@
     renderNotices();
     renderReview();
     save();
+  }
+
+  /** Dusk to dawn: the night so far, with the reveal moves marked. */
+  function nightClock() {
+    const done = Math.min(game.round, E.MAX_ROUNDS);
+    const pct = (r) => ((r / E.MAX_ROUNDS) * 100).toFixed(2);
+    const over = game.phase === 'over';
+    const dawn = over && game.winner === 'fugitive';
+    const left = E.MAX_ROUNDS - done;
+    const note = dawn ? 'Dawn broke' : over ? `Caught after ${done} move${done === 1 ? '' : 's'}`
+      : `${left} move${left === 1 ? '' : 's'} to dawn`;
+    return `<div class="nightclock" title="Reveal moves: ${E.REVEAL_ROUNDS.join(', ')}">
+      <div class="nc-track">${E.REVEAL_ROUNDS.map((r) => `<span class="nc-tick ${r <= done ? 'past' : ''}" style="left:${pct(r)}%"></span>`).join('')}
+        <span class="nc-moon ${dawn ? 'sun' : ''}" style="left:${pct(dawn ? E.MAX_ROUNDS : done)}%"></span></div>
+      <div class="nc-labels"><span>Dusk</span><span>${note}</span><span>Dawn</span></div></div>`;
+  }
+
+  /** The move that brought a piece to `pos` ({from, ticket}), from the game's history, so
+   * the board can show it travelling; null when its last move didn't end here (an undo). */
+  function lastMove(side, i, start, pos) {
+    const mine = (a) => a.side === side && a.to != null && (side === 'F' || a.i === i);
+    const h = game.history || [];
+    let k = h.length - 1;
+    while (k >= 0 && !mine(h[k])) k--;
+    if (k < 0 || h[k].to !== pos) return null;
+    let j = k - 1;
+    while (j >= 0 && !mine(h[j])) j--;
+    return { from: j >= 0 ? h[j].to : start, ticket: h[k].ticket };
   }
 
   function renderTurn() {
@@ -947,7 +1032,7 @@
       hint = 'Follow the on-screen instructions.';
     }
 
-    el.innerHTML = `<div class="round">${roundLabel}</div><div class="who">${who}</div>
+    el.innerHTML = `<div class="round">${roundLabel}</div>${nightClock()}<div class="who">${who}</div>
       <div class="hint">${hint}</div><div class="actions">${actions}</div>`;
 
     const on = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener('click', fn); };
@@ -959,7 +1044,13 @@
     });
     on('a-confirm', () => {
       if (game.winner) return enterMode('over');
-      if (vsBot()) { saveRecord(); return enterMode('bot-detectives'); }
+      if (vsBot()) {
+        const turn = game.log.slice(game.log.length && game.log[game.log.length - 1].double ? -2 : -1);
+        const seen = turn.filter((e) => e.reveal).pop();
+        if (seen) announceReveal(seen, 'The detectives know where you are. Move on fast.', true);
+        saveRecord();
+        return enterMode('bot-detectives');
+      }
       enterMode('handoff-detectives');
     });
     on('a-pass', () => {
@@ -980,7 +1071,7 @@
     const fWhere = mode === 'fugitive' || mode === 'over' || humanIs('fugitive')
       ? `At ${game.fugitive.pos}`
       : last ? `Last seen at ${last.pos} (move ${last.round})` : 'Not yet seen';
-    let html = `<div class="player ${mode === 'fugitive' || mode === 'bot-fugitive' ? 'current' : ''}" style="--pc:${FUG_COLOR}">
+    let html = `<div class="player ${mode === 'fugitive' || mode === 'bot-fugitive' ? 'current' : ''}" style="--pc:${FUG_RING}">
       <span class="dot" style="background:${FUG_COLOR}"></span>
       <div><div class="name">${esc(game.fugitive.name)}</div><div class="where">${fWhere}</div></div>
       <div class="tickets">${ticketChips(game.fugitive.tickets, ['cab', 'tram', 'metro', 'secret', 'double'])}</div>
@@ -1080,6 +1171,14 @@
     if (game && game.phase !== 'over' && !confirm('Abandon the current game and start a new one?')) return;
     lastModeBeforeSetup = mode;
     showSetup();
+  });
+  const lit = $('#opt-lighting');
+  lit.checked = prefs.lighting !== false;
+  board.setEffects(lit.checked);
+  lit.addEventListener('change', () => {
+    prefs.lighting = lit.checked;
+    savePrefs();
+    board.setEffects(lit.checked);
   });
   const opt = $('#opt-possible');
   opt.checked = prefs.showPossible;

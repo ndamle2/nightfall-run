@@ -16,6 +16,7 @@
         <button data-zoom="out" title="Zoom out">−</button>
         <button data-zoom="fit" title="Fit map">⤢</button>
       </div>
+      <div id="dispatch" class="dispatch hidden" role="status" aria-live="polite"></div>
       <div id="toast" class="toast hidden"></div>
     </main>
 
@@ -33,7 +34,8 @@
       </section>
       <section id="notices"></section>
       <section class="card options">
-        <label><input type="checkbox" id="opt-possible"> Shade every station the fugitive could be at</label>
+        <label><input type="checkbox" id="opt-possible"> <span>Shade every station the fugitive could be at <span id="cand-count" class="cand-count"></span></span></label>
+        <label><input type="checkbox" id="opt-lighting"> <span>Night lighting: torchlight, sky and searchlights</span></label>
       </section>
       <section class="card legend">
         <h2>Map key</h2>
@@ -42,6 +44,7 @@
           <span class="lg-dot tram"></span><span><b>Tram</b>: green lines, stopping only at green and red stations.</span>
           <span class="lg-dot metro"></span><span><b>Metro</b>: red lines, stopping only at red stations.</span>
           <span class="lg-dot ferry"></span><span><b>Ferry</b>: dashed blue along the river, linking ringed piers (secret tickets only).</span>
+          <span class="lg-pool"></span><span><b>Torchlight</b>: each detective lights the streets around them. The fugitive moves in the dark.</span>
         </div>
         <p class="fineprint" style="margin:10px 0 0">Tram and metro lines run alongside the streets and pass
         through other stations without stopping. Hover a highlighted station to see the exact route.</p>
